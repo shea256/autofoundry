@@ -3,7 +3,7 @@ Provider registry and utilities.
 """
 
 from typing import Dict, Any, Optional
-from . import runpod, vastai
+from . import runpod, vastai, primeintellect
 
 # Registry of providers
 _PROVIDERS = {
@@ -18,6 +18,12 @@ _PROVIDERS = {
         "format_details": vastai.format_instance_details,
         "list_profiles": vastai.list_profiles,
         "API": vastai.API,
+    },
+    "primeintellect": {
+        "get_preset": primeintellect.get_preset,
+        "format_details": primeintellect.format_pod_details,
+        "list_profiles": primeintellect.list_profiles,
+        "API": primeintellect.API,
     },
 }
 

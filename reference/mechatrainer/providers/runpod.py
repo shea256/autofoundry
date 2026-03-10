@@ -11,7 +11,11 @@ PROFILES = {
     "axolotl": {
         # RunPod-specific: Docker image and start command
         "image": "axolotlai/axolotl-base:main-base-py3.11-cu128-2.7.1",
-        "start_cmd": "/bin/bash -lc 'eval \"$(/root/miniconda3/bin/conda shell.bash hook)\"; conda activate py3.11; mkdir -p /workspace && cd /workspace; nvidia-smi || true; axolotl --help || true; sleep infinity'",
+        "start_cmd": [
+            "/bin/bash",
+            "-lc",
+            "eval \"$(/root/miniconda3/bin/conda shell.bash hook)\"; conda activate py3.11; mkdir -p /workspace && cd /workspace; nvidia-smi || true; axolotl --help || true; sleep infinity"
+        ],
         # GPU and resource requirements
         "cloud_type": "SECURE",
         "gpu_count": 1,
