@@ -2,6 +2,7 @@
 name = "autofoundry"
 version = "0.1.0"
 description = "Run ML experiments across GPU clouds"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "typer>=0.9",
