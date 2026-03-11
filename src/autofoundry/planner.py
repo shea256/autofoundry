@@ -67,40 +67,70 @@ def query_all_offers(config: Config, gpu_type: str) -> list[GpuOffer]:
     return all_offers
 
 
-def display_offers(offers: list[GpuOffer]) -> None:
-    """Display GPU offers in a themed table."""
+def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
+    """Display GPU offers grouped by provider. Returns the displayed offers list (for selection by #)."""
     if not offers:
         print_error("No GPU offers found matching your criteria.")
-        return
+        return []
 
-    table = make_table(
-        f"{TERMS['planning']} — GPU AVAILABILITY",
-        [
-            ("#", "af.muted"),
-            ("Provider", "af.secondary"),
-            ("GPU", ""),
-            ("VRAM (GB)", ""),
-            ("$/hr", "af.success"),
-            ("Region", "af.muted"),
-            ("Avail", ""),
-        ],
+    from collections import defaultdict
+
+    MAX_PER_PROVIDER = 50
+
+    by_provider: dict[ProviderName, list[GpuOffer]] = defaultdict(list)
+    for offer in offers:
+        by_provider[offer.provider].append(offer)
+
+    # Display order: providers sorted by their cheapest offer
+    provider_order = sorted(
+        by_provider.keys(),
+        key=lambda p: by_provider[p][0].price_per_hour if by_provider[p] else float("inf"),
     )
 
-    for i, offer in enumerate(offers[:20], 1):  # Show top 20
-        display = PROVIDER_DISPLAY.get(offer.provider, offer.provider.value)
-        table.add_row(
-            str(i),
-            display,
-            offer.gpu_type,
-            f"{offer.gpu_ram_gb:.0f}",
-            f"${offer.price_per_hour:.2f}",
-            offer.region or "—",
-            str(offer.availability) if offer.availability > 0 else "—",
+    displayed: list[GpuOffer] = []
+    global_num = 1
+
+    for provider in provider_order:
+        provider_offers = by_provider[provider][:MAX_PER_PROVIDER]
+        display_name = PROVIDER_DISPLAY.get(provider, provider.value)
+
+        table = make_table(
+            f"{display_name} — {len(provider_offers)} offers",
+            [
+                ("#", "af.muted"),
+                ("GPU", ""),
+                ("VRAM (GB)", ""),
+                ("$/hr", "af.success"),
+                ("DL (Mbps)", "af.muted"),
+                ("Region", "af.muted"),
+                ("Avail", ""),
+            ],
         )
 
+        for offer in provider_offers:
+            dl_speed = f"{offer.inet_down_mbps:.0f}" if offer.inet_down_mbps > 0 else "—"
+            # Show GPU count prefix (e.g. "2x H100 SXM") when > 1,
+            # but skip if already in the name (Lambda Labs includes it)
+            gpu_label = offer.gpu_type
+            if offer.gpu_count > 1 and not gpu_label.startswith(f"{offer.gpu_count}x"):
+                gpu_label = f"{offer.gpu_count}x {gpu_label}"
+            table.add_row(
+                str(global_num),
+                gpu_label,
+                f"{offer.gpu_ram_gb:.0f}",
+                f"${offer.price_per_hour:.2f}",
+                dl_speed,
+                offer.region or "—",
+                str(offer.availability) if offer.availability > 0 else "—",
+            )
+            displayed.append(offer)
+            global_num += 1
+
+        console.print()
+        console.print(table)
+
     console.print()
-    console.print(table)
-    console.print()
+    return displayed
 
 
 def recommend_plan(
@@ -125,10 +155,13 @@ def interactive_plan(
     console.print(f"  [af.muted]Querying supply lines for {gpu_type} availability...[/af.muted]")
 
     offers = query_all_offers(config, gpu_type)
-    display_offers(offers)
+    displayed = display_offers(offers)
 
-    if not offers:
+    if not displayed:
         return None
+
+    # Use displayed list for selection (matches the # shown in tables)
+    offers = displayed
 
     # Show recommendation
     recommendation = recommend_plan(offers, total_experiments)
@@ -160,7 +193,7 @@ def interactive_plan(
         try:
             idx = int(pick) - 1
             if idx < 0 or idx >= len(offers):
-                print_error(f"Invalid selection. Choose 1-{min(len(offers), 20)}")
+                print_error(f"Invalid selection. Choose 1-{len(offers)}")
                 continue
         except ValueError:
             print_error("Enter a number or 'done'")

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07|\r")
 
 from autofoundry.models import InstanceInfo, SshConnectionInfo
 from autofoundry.theme import TERMS, console, print_error, print_success
@@ -71,10 +74,11 @@ def run_remote(
     ssh_cmd = [
         "ssh",
         *_ssh_opts(ssh_key_path),
-        "-tt",  # force PTY so remote output is line-buffered
         "-p", str(ssh.port),
         f"{ssh.username}@{ssh.host}",
-        command,
+        # PYTHONUNBUFFERED forces line-buffered output without a PTY,
+        # avoiding ANSI escape code noise from progress bars
+        f"PYTHONUNBUFFERED=1 {command}",
     ]
 
     lines: list[str] = []
@@ -87,7 +91,9 @@ def run_remote(
     )
 
     for line in proc.stdout:
-        line = line.rstrip("\n")
+        line = _ANSI_RE.sub("", line).rstrip("\n")
+        if not line:
+            continue
         lines.append(line)
         if on_line:
             on_line(unit_label, line)
@@ -181,7 +187,7 @@ def execute_experiment(
     exit_code, lines = run_remote(
         ssh,
         ssh_key_path,
-        "chmod +x /workspace/run_experiment.sh && /workspace/run_experiment.sh",
+        "chmod +x /workspace/run_experiment.sh && stdbuf -oL /workspace/run_experiment.sh",
         unit_label,
         on_line=on_line,
     )

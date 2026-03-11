@@ -43,16 +43,62 @@ class VastAIProvider:
         except httpx.HTTPError:
             return False
 
-    def list_gpu_offers(self, gpu_type: str | None = None) -> list[GpuOffer]:
-        # Query without gpu_name filter — filter client-side for substring matching
-        params: dict = {"api_key": self._api_key}
+    def _find_gpu_variants(self, gpu_type: str) -> list[str]:
+        """Find all Vast.ai GPU names matching a search term (e.g., 'H100' -> ['H100 NVL', 'H100 PCIE', 'H100 SXM'])."""
+        # Query a small set of cheap offers to discover GPU names, then separately
+        # query expensive ones (H100s won't appear in cheapest results)
+        all_names: set[str] = set()
+        for min_price in [0.0, 1.0]:
+            query: dict = {
+                "rentable": {"eq": True},
+                "type": "on-demand",
+                "order": [["dph_total", "asc"]],
+                "limit": 500,
+                "allocated_storage": 5.0,
+            }
+            if min_price > 0:
+                query["dph_total"] = {"gte": min_price}
+            resp = self._client.post(
+                "/bundles/",
+                json=query,
+                params={"api_key": self._api_key},
+            )
+            if resp.status_code != 200:
+                continue
+            for item in resp.json().get("offers", []):
+                name = item.get("gpu_name", "")
+                if name:
+                    all_names.add(name)
 
-        resp = self._client.get("/bundles/", params=params)
+        return [n for n in all_names if gpu_type.upper() in n.upper()]
+
+    def list_gpu_offers(self, gpu_type: str | None = None) -> list[GpuOffer]:
+        # Vast.ai CLI uses POST /bundles/ with query as JSON body
+        query: dict = {
+            "rentable": {"eq": True},
+            "type": "on-demand",
+            "order": [["dph_total", "asc"]],
+            "limit": 100,
+            "allocated_storage": 5.0,
+        }
+
+        # Server-side GPU name filter using the "in" operator
+        if gpu_type:
+            variants = self._find_gpu_variants(gpu_type)
+            if not variants:
+                return []
+            query["gpu_name"] = {"in": variants}
+
+        resp = self._client.post(
+            "/bundles/",
+            json=query,
+            params={"api_key": self._api_key},
+        )
         resp.raise_for_status()
         data = resp.json()
 
-        # Response uses "bundles" key
-        items = data.get("bundles", data.get("offers", data)) if isinstance(data, dict) else data
+        # Response uses "offers" key
+        items = data.get("offers", data.get("bundles", data)) if isinstance(data, dict) else data
         if not isinstance(items, list):
             items = []
 
@@ -63,8 +109,12 @@ class VastAIProvider:
 
             gpu_name = item.get("gpu_name", "Unknown")
 
-            # Client-side filter: match if user's query is a substring
+            # Client-side GPU type filter: match if user's query is a substring
             if gpu_type and gpu_type.upper() not in gpu_name.upper():
+                continue
+
+            # Skip non-rentable offers (belt-and-suspenders with server filter)
+            if not item.get("rentable", True) or item.get("rented", False):
                 continue
 
             price = item.get("dph_total", 0)
@@ -80,6 +130,7 @@ class VastAIProvider:
                 gpu_ram_gb=gpu_ram / 1024 if gpu_ram > 100 else gpu_ram,
                 price_per_hour=price,
                 region=item.get("geolocation", ""),
+                inet_down_mbps=item.get("inet_down", 0) or 0,
                 availability=1,
             ))
         return offers
@@ -89,15 +140,29 @@ class VastAIProvider:
         if not offer_id:
             raise ValueError("Vast.ai requires an offer_id on InstanceConfig")
 
-        payload = {
+        payload: dict = {
             "client_id": "me",
             "image": config.image,
-            "disk": config.disk_gb,
+            "disk": float(config.disk_gb),
             "label": config.name,
+            "runtype": "ssh",
         }
+        if config.ssh_public_key:
+            payload["env"] = {
+                "-e SSH_PUBLIC_KEY": config.ssh_public_key,
+                "-p 22:22": "",
+            }
 
-        resp = self._client.put(f"/asks/{offer_id}/", json=payload)
-        resp.raise_for_status()
+        resp = self._client.put(
+            f"/asks/{offer_id}/",
+            json=payload,
+        )
+        if resp.status_code >= 300:
+            raise httpx.HTTPStatusError(
+                f"Vast.ai create_instance failed ({resp.status_code}): {resp.text}",
+                request=resp.request,
+                response=resp,
+            )
         data = resp.json()
         instance_id = str(data.get("new_contract", data.get("id", "")))
 
@@ -159,6 +224,25 @@ class VastAIProvider:
         if info.ssh is None:
             raise RuntimeError(f"No SSH info available for Vast.ai instance {instance_id}")
         return info.ssh
+
+    def stop_instance(self, instance_id: str) -> None:
+        """Stop an instance (releases GPU, keeps disk)."""
+        resp = self._client.put(
+            f"/instances/{instance_id}/",
+            json={"state": "stopped"},
+            params={"api_key": self._api_key},
+        )
+        resp.raise_for_status()
+
+    def start_instance(self, instance_id: str) -> InstanceInfo:
+        """Restart a stopped instance."""
+        resp = self._client.put(
+            f"/instances/{instance_id}/",
+            json={"state": "running"},
+            params={"api_key": self._api_key},
+        )
+        resp.raise_for_status()
+        return self.get_instance(instance_id)
 
     def delete_instance(self, instance_id: str) -> None:
         resp = self._client.delete(

@@ -12,6 +12,7 @@ class ProviderName(StrEnum):
     RUNPOD = "runpod"
     VASTAI = "vastai"
     PRIMEINTELLECT = "primeintellect"
+    LAMBDALABS = "lambdalabs"
 
 
 class SessionStatus(StrEnum):
@@ -52,6 +53,7 @@ class GpuOffer(BaseModel):
     gpu_ram_gb: float
     price_per_hour: float
     region: str | None = None
+    inet_down_mbps: float = 0.0
     availability: int = 1
     metadata: dict[str, str] = Field(
         default_factory=dict,

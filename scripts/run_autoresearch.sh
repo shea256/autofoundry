@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
+# Run script: execute the experiment (assumes deps are already installed).
+# Use with a pre-built image: autofoundry run scripts/run_autoresearch.sh --image youruser/autoresearch:latest
+# Or standalone (installs everything from scratch):
+#   autofoundry run scripts/run_autoresearch_full.sh
 set -e
 
-cd /workspace
-git clone https://github.com/karpathy/autoresearch.git
-cd autoresearch
-
-curl -LsSf https://astral.sh/uv/install.sh | sh
+cd /workspace/autoresearch
 export PATH="$HOME/.local/bin:$PATH"
 
-uv sync
 uv run prepare.py
 uv run train.py

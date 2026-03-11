@@ -131,7 +131,7 @@ def make_table(title: str, columns: list[tuple[str, str]]) -> Table:
         border_style=COLORS["primary"],
         header_style="af.secondary",
         show_lines=True,
-        box=box.SIMPLE_HEAVY,
+        box=box.ROUNDED,
     )
     for name, style in columns:
         table.add_column(name, style=style)

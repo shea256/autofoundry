@@ -18,6 +18,7 @@ PROVIDER_DISPLAY = {
     ProviderName.RUNPOD: "RunPod",
     ProviderName.VASTAI: "Vast.ai",
     ProviderName.PRIMEINTELLECT: "PRIME Intellect",
+    ProviderName.LAMBDALABS: "Lambda Labs",
 }
 
 
@@ -44,6 +45,7 @@ class Config:
         self.ssh_key_path: str = str(Path.home() / ".ssh" / "id_rsa")
         self.default_gpu_type: str = "H100"
         self.last_script: str = ""
+        self.last_image: str = ""
         self._next_operation: int = 1
 
     @property
@@ -65,6 +67,7 @@ class Config:
             "ssh_key_path": self.ssh_key_path,
             "default_gpu_type": self.default_gpu_type,
             "last_script": self.last_script,
+            "last_image": self.last_image,
             "next_operation": self._next_operation,
             "api_keys": {p.value: key for p, key in self.api_keys.items()},
         }
@@ -83,6 +86,7 @@ class Config:
         config.ssh_key_path = data.get("ssh_key_path", config.ssh_key_path)
         config.default_gpu_type = data.get("default_gpu_type", config.default_gpu_type)
         config.last_script = data.get("last_script", "")
+        config.last_image = data.get("last_image", "")
         config._next_operation = data.get("next_operation", 1)
 
         api_keys = data.get("api_keys", {})

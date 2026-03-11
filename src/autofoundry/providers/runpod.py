@@ -236,11 +236,22 @@ class RunPodProvider:
             ssh=ssh,
         )
 
-    def wait_until_ready(self, instance_id: str, timeout: int = 300) -> InstanceInfo:
+    def wait_until_ready(self, instance_id: str, timeout: int = 900) -> InstanceInfo:
         deadline = time.time() + timeout
         delay = 5.0
+        last_status = ""
         while time.time() < deadline:
             info = self.get_instance(instance_id)
+            # Log status changes so user can see progress
+            status_str = f"{info.status.value}"
+            if info.ssh:
+                status_str += f" ssh={info.ssh.host}:{info.ssh.port}"
+            if status_str != last_status:
+                from autofoundry.theme import console
+                console.print(
+                    f"  [af.muted]  polling: {status_str}[/af.muted]"
+                )
+                last_status = status_str
             if info.status == InstanceStatus.RUNNING and info.ssh:
                 return info
             time.sleep(min(delay, deadline - time.time()))
@@ -252,6 +263,17 @@ class RunPodProvider:
         if info.ssh is None:
             raise RuntimeError(f"No SSH info available for RunPod instance {instance_id}")
         return info.ssh
+
+    def stop_instance(self, instance_id: str) -> None:
+        """Stop a pod (releases GPU, keeps disk). Cheap storage-only billing."""
+        resp = self._client.post(f"/pods/{instance_id}/stop")
+        resp.raise_for_status()
+
+    def start_instance(self, instance_id: str) -> InstanceInfo:
+        """Restart a stopped pod. Near-instant since disk is preserved."""
+        resp = self._client.post(f"/pods/{instance_id}/start")
+        resp.raise_for_status()
+        return self.get_instance(instance_id)
 
     def delete_instance(self, instance_id: str) -> None:
         resp = self._client.delete(f"/pods/{instance_id}")

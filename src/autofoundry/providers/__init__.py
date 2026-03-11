@@ -21,5 +21,8 @@ def get_provider(name: ProviderName, api_key: str) -> CloudProvider:
     elif name == ProviderName.PRIMEINTELLECT:
         from autofoundry.providers.primeintellect import PrimeIntellectProvider
         return PrimeIntellectProvider(api_key)
+    elif name == ProviderName.LAMBDALABS:
+        from autofoundry.providers.lambdalabs import LambdaLabsProvider
+        return LambdaLabsProvider(api_key)
     else:
         raise ValueError(f"Unknown provider: {name}")

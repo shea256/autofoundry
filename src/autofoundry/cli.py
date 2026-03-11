@@ -95,11 +95,42 @@ def _show_session_summary(session: Session) -> None:
 
 
 @app.command()
+def build(
+    setup_script: str = typer.Argument(..., help="Path to a setup script that installs dependencies"),
+    tag: str = typer.Option(..., "--tag", "-t", help="Docker image tag (e.g. user/autoresearch:latest)"),
+    base: str = typer.Option(None, "--base", "-b", help="Base Docker image to build on"),
+) -> None:
+    """Build a Docker image with pre-installed dependencies for faster runs."""
+    from autofoundry.image_builder import DEFAULT_BASE_IMAGE, build_and_push
+
+    print_banner(version=__version__)
+
+    path = Path(setup_script).expanduser().resolve()
+    if not path.exists() or not path.is_file():
+        print_error(f"File not found: {path}")
+        raise typer.Exit(1)
+
+    base_image = base or DEFAULT_BASE_IMAGE
+
+    if not build_and_push(path, tag, base_image):
+        raise typer.Exit(1)
+
+    # Save last-built image for easy reuse
+    config = _load_or_setup_config()
+    config.last_image = tag
+    config.save()
+
+    console.print()
+    print_success(f"Use this image with: autofoundry run <script> --image {tag}")
+
+
+@app.command()
 def run(
     script: str = typer.Argument(None, help="Path to the script to run on GPU instances"),
     resume: str = typer.Option(None, "--resume", "-r", help="Resume a previous operation"),
     num: int = typer.Option(None, "--num", "-n", help="Number of experiment runs"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type (e.g. H100)"),
+    image: str = typer.Option(None, "--image", "-i", help="Custom Docker image to use (e.g. user/repo:tag)"),
 ) -> None:
     """Launch autofoundry — GPU experiment orchestration engine."""
     print_banner(version=__version__)
@@ -141,6 +172,21 @@ def run(
     if gpu is not None:
         gpu_type = gpu
 
+    # Resolve custom image: CLI flag > interactive prompt
+    custom_image = image
+    if not custom_image and config.last_image:
+        from rich.prompt import Confirm as RichConfirm
+
+        console.print()
+        console.print(
+            f"  [af.muted]Last built image: {config.last_image}[/af.muted]"
+        )
+        if RichConfirm.ask(
+            "  [af.label]Use pre-built image? (faster startup)[/af.label]",
+            default=True,
+        ):
+            custom_image = config.last_image
+
     # Remember script for next time
     config.last_script = script_path
 
@@ -160,6 +206,8 @@ def run(
     store.create_experiments(num_experiments)
     store.log_event("session_created", {"script_path": script_path, "gpu_type": gpu_type})
 
+    if custom_image:
+        print_status("Image", custom_image)
     _show_session_summary(session)
 
     # Planning
@@ -180,7 +228,11 @@ def run(
         teardown_instances,
     )
 
-    instances = provision_instances(config, plan, session_id, store)
+    instances = provision_instances(
+        config, plan, session_id, store,
+        custom_image=custom_image,
+        gpu_type_filter=gpu_type,
+    )
     if not instances:
         print_error("No instances came online. Aborting.")
         store.update_session_status(SessionStatus.FAILED)
@@ -223,18 +275,31 @@ def run(
     store.update_session_status(SessionStatus.REPORTING)
 
     # Teardown
-    from rich.prompt import Confirm as RichConfirm
+    from autofoundry.provisioner import stop_instances
 
-    if RichConfirm.ask(
-        f"  [af.label]Terminate all {TERMS['instances'].lower()}?[/af.label]",
-        default=True,
-    ):
+    console.print()
+    action = Prompt.ask(
+        f"  [af.label]What to do with {TERMS['instances'].lower()}?[/af.label]\n"
+        "  [af.muted]  stop = release GPU, keep disk (fast restart later)\n"
+        "  terminate = delete everything\n"
+        "  keep = leave running[/af.muted]\n"
+        "  [af.label]Choice[/af.label]",
+        choices=["stop", "terminate", "keep"],
+        default="stop",
+    )
+
+    if action == "stop":
+        stop_instances(config, instances)
+        store.update_session_status(SessionStatus.PAUSED)
+        print_status("Status", "PAUSED — units stopped, disk preserved")
+        print_status("Resume", f"autofoundry run --resume {session_id}")
+    elif action == "terminate":
         teardown_instances(config, instances)
         store.update_session_status(SessionStatus.COMPLETED)
     else:
         store.update_session_status(SessionStatus.PAUSED)
-        print_status("Status", "PAUSED — instances still running")
-        print_status("Resume", f"autofoundry --resume {session_id}")
+        print_status("Status", "PAUSED — units still running")
+        print_status("Resume", f"autofoundry run --resume {session_id}")
 
     store.close()
 
