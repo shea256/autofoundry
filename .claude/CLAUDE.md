@@ -1,7 +1,7 @@
 # Autofoundry
 
-CLI companion to Karpathy's autoresearch. Run ANY ML experiment script across GPUs on multiple cloud providers.
-`autofoundry <script>` → pick GPUs → provision → execute → stream output → report metrics → teardown.
+CLI tool to run ML experiment scripts across GPUs on multiple cloud providers.
+`autofoundry run <script>` → pick GPUs → provision → execute → stream output → report metrics → teardown.
 
 ## Architecture
 
@@ -9,11 +9,12 @@ CLI companion to Karpathy's autoresearch. Run ANY ML experiment script across GP
 cli.py → planner.py → provisioner.py → executor.py → reporter.py
 ```
 
+- **CLI**: `src/autofoundry/cli.py` — `run`, `config`, `offers`, `volumes`, `status`, `results`, `teardown` commands via Typer
 - **Models**: `src/autofoundry/models.py` — GpuOffer, InstanceConfig, InstanceInfo, VolumeInfo, ProvisioningPlan
 - **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml`
 - **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect,lambdalabs}.py`
 - **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("sorties", "units", "supply lines")
-- **State**: `src/autofoundry/state.py` — Session persistence
+- **State**: `src/autofoundry/state.py` — SQLite-backed session persistence (WAL mode)
 
 ## Run Modes
 1. **Scratch** — self-contained script installs everything from zero (e.g. `run_autoresearch.sh`). Simplest, always works.
@@ -38,7 +39,7 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 ### Vast.ai
 - Response uses `"bundles"` key (not `"offers"`)
 - Uses `api_key` as query param
-- GPU name filtering must be client-side (substring match), not exact match
+- GPU name filtering must be client-side (substring match via `_find_gpu_variants`), not exact match
 - Provider image: `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`
 
 ### PRIME Intellect
@@ -57,11 +58,17 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - Region handling: each region is separate offer with metadata
 
 ## SSH Execution
-- `executor.py` uses subprocess SSH/SCP (not asyncssh)
+- `executor.py` uses subprocess SSH/SCP (not asyncssh, despite the dependency)
 - `BatchMode=yes` + `PasswordAuthentication=no` prevent password prompt hangs
 - `-tt` flag forces PTY for line-buffered remote output streaming
 - SSH retry loop (10 attempts, 5s delay) before upload — key auth can lag behind port availability
 - Metadata passthrough: `GpuOffer.metadata` → `InstanceConfig.metadata` → provider's `create_instance`
+
+## Session Persistence
+- SQLite at `~/.config/autofoundry/sessions/{session_id}.db`
+- Tables: session, instances, experiments, results, events
+- Session states: CONFIGURING → PLANNING → PROVISIONING → RUNNING → REPORTING → COMPLETED/FAILED/PAUSED
+- Resume support: `--resume` flag restarts stopped instances and runs pending experiments
 
 ## Scripts
 - `scripts/run_autoresearch.sh` — clone, install deps, run. Works from scratch or with volumes (pulls on re-run).
