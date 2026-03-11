@@ -11,6 +11,7 @@ from autofoundry.config import PROVIDER_DISPLAY, Config
 from autofoundry.models import (
     InstanceConfig,
     InstanceInfo,
+    InstanceStatus,
     ProviderName,
     ProvisioningPlan,
 )
@@ -194,6 +195,99 @@ def provision_instances(
     console.print()
 
     return instances
+
+
+def restart_instances(
+    config: Config,
+    stored_instances: list[InstanceInfo],
+    store: SessionStore,
+) -> list[InstanceInfo]:
+    """Restart stopped instances from a previous session.
+
+    Queries each provider for current status, restarts stopped instances,
+    and waits for SSH. Returns the list of instances that came back online.
+    Instances that are already running are included as-is.
+    Lost instances (deleted/errored) are reported.
+    """
+    print_header("REACTIVATION SEQUENCE")
+    console.print()
+
+    if not stored_instances:
+        print_error("No instances found in session")
+        return []
+
+    console.print(
+        f"  [af.primary]Checking {len(stored_instances)} "
+        f"{TERMS['instances'].lower()}...[/af.primary]"
+    )
+    console.print()
+
+    live: list[InstanceInfo] = []
+    lost = 0
+
+    for info in stored_instances:
+        display = PROVIDER_DISPLAY.get(info.provider, info.provider.value)
+        label = info.name or info.instance_id
+
+        try:
+            provider = get_provider(info.provider, config.api_keys[info.provider])
+            current = provider.get_instance(info.instance_id)
+
+            if current.status == InstanceStatus.RUNNING and current.ssh:
+                console.print(
+                    f"  [af.success]{label} [{display}] already running "
+                    f"@ {current.ssh.host}:{current.ssh.port}[/af.success]"
+                )
+                store.update_instance_ssh(info.instance_id, current.ssh)
+                live.append(current)
+
+            elif current.status in (InstanceStatus.STOPPED, InstanceStatus.PENDING):
+                if not hasattr(provider, "start_instance"):
+                    print_error(
+                        f"{label} [{display}] stopped but provider "
+                        f"doesn't support restart"
+                    )
+                    lost += 1
+                    continue
+
+                console.print(
+                    f"  [af.secondary]{label} [{display}] "
+                    f"restarting...[/af.secondary]"
+                )
+                provider.start_instance(info.instance_id)
+                restarted = provider.wait_until_ready(info.instance_id, timeout=300)
+                console.print(
+                    f"  [af.success]{label} [{display}] "
+                    f"ONLINE @ {restarted.ssh.host}:{restarted.ssh.port}[/af.success]"
+                )
+                store.update_instance_ssh(info.instance_id, restarted.ssh)
+                store.update_instance_status(info.instance_id, InstanceStatus.RUNNING)
+                live.append(restarted)
+
+            else:
+                console.print(
+                    f"  [af.muted]{label} [{display}] "
+                    f"status: {current.status.value} — skipping[/af.muted]"
+                )
+                lost += 1
+
+        except Exception as e:
+            print_error(f"{label} [{display}] unreachable: {e}")
+            lost += 1
+
+    console.print()
+    if live:
+        print_success(
+            f"{len(live)}/{len(stored_instances)} "
+            f"{TERMS['instances'].lower()} online"
+        )
+    if lost:
+        print_error(
+            f"{lost} {TERMS['instances'].lower()} lost (deleted or unreachable)"
+        )
+    console.print()
+
+    return live
 
 
 def stop_instances(

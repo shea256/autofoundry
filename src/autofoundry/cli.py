@@ -158,8 +158,99 @@ def run(
             raise typer.Exit(1)
         print_success(f"Resuming {TERMS['session']} {resume}")
         _show_session_summary(session)
-        # TODO: resume from last state (Phase 6)
-        console.print("  [af.muted]Resume logic not yet implemented[/af.muted]")
+
+        # Check for pending experiments
+        pending = store.get_pending_experiments()
+        if not pending:
+            console.print("  [af.muted]No pending experiments — nothing to resume.[/af.muted]")
+            store.close()
+            return
+
+        console.print(
+            f"  [af.primary]{len(pending)} pending "
+            f"{TERMS['experiments'].lower()} to run[/af.primary]"
+        )
+        console.print()
+
+        # Restart stopped instances
+        from autofoundry.provisioner import (
+            register_cleanup_handler,
+            restart_instances,
+            stop_instances,
+            teardown_instances,
+        )
+
+        stored_instances = store.get_instances()
+        instances = restart_instances(config, stored_instances, store)
+
+        if not instances:
+            print_error("No instances came back online. Aborting.")
+            store.close()
+            raise typer.Exit(1)
+
+        register_cleanup_handler(config, instances)
+        store.update_session_status(SessionStatus.RUNNING)
+
+        # Run pending experiments
+        from autofoundry.executor import run_all_experiments
+        from autofoundry.reporter import print_report
+
+        script_path = session.script_path
+        num_pending = len(pending)
+
+        print_header(f"{TERMS['experiments']} EXECUTION")
+        console.print()
+        console.print(
+            f"  [af.primary]Resuming {num_pending} "
+            f"{TERMS['experiments'].lower()} across "
+            f"{len(instances)} {TERMS['instances'].lower()}...[/af.primary]"
+        )
+        console.print()
+
+        runs = run_all_experiments(
+            instances,
+            num_pending,
+            script_path,
+            config.ssh_key_path,
+        )
+
+        # Store results
+        for run in runs:
+            store.log_event("experiment_completed", {
+                "experiment_index": run.experiment_index,
+                "exit_code": run.exit_code or 0,
+                "metrics": run.metrics,
+            })
+
+        # Report (include previously completed experiments too)
+        print_report(runs)
+        store.update_session_status(SessionStatus.REPORTING)
+
+        # Teardown prompt
+        console.print()
+        action = Prompt.ask(
+            f"  [af.label]What to do with {TERMS['instances'].lower()}?[/af.label]\n"
+            "  [af.muted]  stop = release GPU, keep disk (fast restart later)\n"
+            "  terminate = delete everything\n"
+            "  keep = leave running[/af.muted]\n"
+            "  [af.label]Choice[/af.label]",
+            choices=["stop", "terminate", "keep"],
+            default="stop",
+        )
+
+        if action == "stop":
+            stop_instances(config, instances)
+            store.update_session_status(SessionStatus.PAUSED)
+            print_status("Status", "PAUSED — units stopped, disk preserved")
+            print_status("Resume", f"autofoundry run --resume {resume}")
+        elif action == "terminate":
+            teardown_instances(config, instances)
+            store.update_session_status(SessionStatus.COMPLETED)
+        else:
+            store.update_session_status(SessionStatus.PAUSED)
+            print_status("Status", "PAUSED — units still running")
+            print_status("Resume", f"autofoundry run --resume {resume}")
+
         store.close()
         return
 
