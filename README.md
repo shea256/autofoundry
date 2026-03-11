@@ -57,14 +57,27 @@ echo "training_seconds: 300"
 
 Autofoundry aggregates these across all experiment runs in the final report.
 
-## Pre-building Images
-
-For faster provisioning, pre-bake your dependencies into a Docker image:
+## Example: autoresearch
 
 ```bash
-uv run autofoundry build scripts/setup_autoresearch.sh --tag youruser/autoresearch:latest
-uv run autofoundry run scripts/run_autoresearch.sh --image youruser/autoresearch:latest
+uv run autofoundry run scripts/run_autoresearch.sh
 ```
+
+This provisions an H100, clones autoresearch, trains a 50M parameter language model, and reports metrics including validation BPB, MFU, and throughput.
+
+## Network Volumes
+
+Attach persistent storage so dependencies survive across runs:
+
+```bash
+# First run — creates volume, installs deps to /workspace
+uv run autofoundry run scripts/run_autoresearch.sh --volume my-workspace
+
+# Second run — finds existing volume, skips install
+uv run autofoundry run scripts/run_autoresearch.sh --volume my-workspace
+```
+
+Supported on RunPod and Lambda Labs.
 
 ## Resuming Sessions
 
@@ -86,32 +99,29 @@ Options:
   --num, -n           Number of experiment runs (default: 1)
   --gpu, -g           GPU type to search for (default: H100)
   --resume, -r        Resume a previous session
-  --image, -i         Custom Docker image
+  --volume, -v        Network volume name (RunPod, Lambda Labs)
 
-autofoundry build <setup_script> [OPTIONS]
-
-Arguments:
-  setup_script        Path to setup shell script
-
-Options:
-  --tag, -t           Docker image tag (required)
-  --base, -b          Base Docker image
+autofoundry config          Configure provider API keys
+autofoundry offers          Browse GPU offers
+autofoundry volumes         List network volumes
+autofoundry status [OP_ID]  Show operation status
+autofoundry results OP_ID   Show experiment metrics
+autofoundry teardown OP_ID  Terminate instances
 ```
 
 ## Architecture
 
 ```
-cli.py           Entry point — run and build commands
+cli.py           Entry point — run, config, offers, volumes, status, results, teardown
 planner.py       GPU offer querying and selection
 provisioner.py   Instance lifecycle management
 executor.py      SSH-based script upload and execution
 reporter.py      Metrics aggregation and display
 providers/       Provider API implementations
-models.py        Data models (GpuOffer, InstanceConfig, Session)
+models.py        Data models (GpuOffer, InstanceConfig, VolumeInfo, Session)
 config.py        TOML configuration management
 state.py         SQLite session persistence
 theme.py         Terminal styling
-image_builder.py Docker image pre-building
 ```
 
 ## Requirements

@@ -13,6 +13,7 @@ from autofoundry.models import (
     InstanceStatus,
     ProviderName,
     SshConnectionInfo,
+    VolumeInfo,
 )
 
 
@@ -163,6 +164,47 @@ class RunPodProvider:
 
         return offers
 
+    def list_volumes(self) -> list[VolumeInfo]:
+        """List all network volumes in the account."""
+        gql_headers = {"Authorization": f"Bearer {self._api_key}"}
+        resp = httpx.post(
+            self.GRAPHQL_URL,
+            json={"query": "query { myself { networkVolumes { id name size dataCenterId } } }"},
+            headers=gql_headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        volumes = resp.json().get("data", {}).get("myself", {}).get("networkVolumes", [])
+        return [
+            VolumeInfo(
+                provider=ProviderName.RUNPOD,
+                volume_id=v["id"],
+                name=v.get("name", ""),
+                size_gb=v.get("size", 0),
+                region=v.get("dataCenterId", ""),
+                mount_path="/workspace",
+            )
+            for v in volumes
+        ]
+
+    def create_volume(self, name: str, size_gb: int, data_center_id: str) -> VolumeInfo:
+        """Create a new network volume."""
+        resp = self._client.post(
+            "/networkvolumes",
+            json={"name": name, "size": size_gb, "dataCenterId": data_center_id},
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(f"RunPod create_volume failed: {resp.status_code} {resp.text}")
+        vol = resp.json()
+        return VolumeInfo(
+            provider=ProviderName.RUNPOD,
+            volume_id=vol["id"],
+            name=name,
+            size_gb=size_gb,
+            region=data_center_id,
+            mount_path="/workspace",
+        )
+
     def create_instance(self, config: InstanceConfig) -> InstanceInfo:
         # Register SSH key in RunPod account settings (required for SSH access)
         if config.ssh_public_key:
@@ -175,7 +217,7 @@ class RunPodProvider:
             gpu_type_id = config.gpu_type
             cloud_type = "SECURE"
 
-        data = {
+        data: dict = {
             "name": config.name,
             "imageName": config.image,
             "gpuTypeIds": [gpu_type_id],
@@ -188,6 +230,9 @@ class RunPodProvider:
             "supportPublicIp": True,
             "ports": ["22/tcp"],
         }
+
+        if config.volume_id:
+            data["networkVolumeId"] = config.volume_id
 
         resp = self._client.post("/pods", json=data)
         if resp.status_code >= 300:

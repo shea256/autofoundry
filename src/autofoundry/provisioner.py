@@ -118,15 +118,15 @@ def provision_instances(
     plan: ProvisioningPlan,
     session_id: str,
     store: SessionStore,
-    custom_image: str | None = None,
     gpu_type_filter: str | None = None,
+    volume_id: str = "",
 ) -> list[InstanceInfo]:
     """Provision all instances in the plan in parallel.
 
     Args:
-        custom_image: If provided, use this Docker image instead of the provider default.
         gpu_type_filter: User's original GPU search term (e.g., "H100") for retry queries.
             If None, falls back to the specific offer's gpu_type.
+        volume_id: Network volume ID to attach to instances.
     """
     print_header(f"{TERMS['provisioning']}")
     console.print()
@@ -138,7 +138,7 @@ def provision_instances(
     for offer, count in plan.offers:
         provider = get_provider(offer.provider, config.api_keys[offer.provider])
         for _ in range(count):
-            image = custom_image or PROVIDER_IMAGES.get(
+            image = PROVIDER_IMAGES.get(
                 offer.provider,
                 "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel",
             )
@@ -150,6 +150,7 @@ def provision_instances(
                 disk_gb=50,
                 ssh_public_key=_read_ssh_public_key(config.ssh_key_path),
                 offer_id=offer.offer_id,
+                volume_id=volume_id,
                 metadata=offer.metadata,
             )
             retry_gpu = gpu_type_filter or offer.gpu_type
