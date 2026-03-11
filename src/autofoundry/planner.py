@@ -52,11 +52,11 @@ def query_all_offers(config: Config, gpu_type: str) -> list[GpuOffer]:
                 elif offers:
                     console.print(
                         f"  [af.success]OK:[/af.success] {display} — "
-                        f"{len(offers)} offers found"
+                        f"{len(offers)} {TERMS['instances'].lower()} found"
                     )
                 else:
                     console.print(
-                        f"  [af.muted]{display} — no {gpu_type} offers[/af.muted]"
+                        f"  [af.muted]{display} — no {gpu_type} {TERMS['instances'].lower()}[/af.muted]"
                     )
                 all_offers.extend(offers)
             except Exception as e:
@@ -70,7 +70,7 @@ def query_all_offers(config: Config, gpu_type: str) -> list[GpuOffer]:
 def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
     """Display GPU offers grouped by provider. Returns the displayed offers list (for selection by #)."""
     if not offers:
-        print_error("No GPU offers found matching your criteria.")
+        print_error(f"No GPU {TERMS['instances'].lower()} found matching your criteria.")
         return []
 
     from collections import defaultdict
@@ -95,7 +95,7 @@ def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
         display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
         table = make_table(
-            f"{display_name} — {len(provider_offers)} {TERMS['offers'].lower()}",
+            f"{display_name} — {len(provider_offers)} {TERMS['instances'].lower()}",
             [
                 ("#", "af.muted"),
                 ("GPU", ""),
@@ -180,7 +180,7 @@ def interactive_plan(
 
     while True:
         pick = Prompt.ask(
-            "  [af.label]Select offer # (or 'done' to confirm)[/af.label]",
+            f"  [af.label]Select {TERMS['instance'].lower()} # (or 'done' to confirm)[/af.label]",
             default="1" if not selections else "done",
         )
 
@@ -199,11 +199,20 @@ def interactive_plan(
             print_error("Enter a number or 'done'")
             continue
 
+        selected = offers[idx]
+        if selected.availability == 0:
+            console.print(
+                f"  [af.alert]WARNING:[/af.alert] This unit shows 0 availability — "
+                f"launch will likely fail."
+            )
+            if not Confirm.ask("  [af.label]Continue anyway?[/af.label]", default=False):
+                continue
+
         count = IntPrompt.ask(
             f"  [af.label]How many {TERMS['instances'].lower()} of this type?[/af.label]",
             default=1,
         )
-        selections.append((offers[idx], count))
+        selections.append((selected, count))
 
         total_instances = sum(c for _, c in selections)
         cost = sum(o.price_per_hour * c for o, c in selections)

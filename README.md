@@ -116,7 +116,7 @@ autofoundry teardown OP_ID  Terminate instances
 ## Architecture
 
 ```
-cli.py           Entry point — run, config, offers, volumes, status, results, teardown
+cli.py           Entry point — run, config, reserves, volumes, status, results, teardown
 planner.py       GPU offer querying and selection
 provisioner.py   Instance lifecycle management
 executor.py      SSH-based script upload and execution

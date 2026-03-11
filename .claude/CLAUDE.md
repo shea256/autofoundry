@@ -9,11 +9,11 @@ CLI tool to run ML experiment scripts across GPUs on multiple cloud providers.
 cli.py → planner.py → provisioner.py → executor.py → reporter.py
 ```
 
-- **CLI**: `src/autofoundry/cli.py` — `run`, `config`, `offers`, `volumes`, `status`, `results`, `teardown` commands via Typer
+- **CLI**: `src/autofoundry/cli.py` — `run`, `config`, `reserves`, `volumes`, `status`, `results`, `teardown` commands via Typer
 - **Models**: `src/autofoundry/models.py` — GpuOffer, InstanceConfig, InstanceInfo, VolumeInfo, ProvisioningPlan
 - **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml`
 - **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect,lambdalabs}.py`
-- **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("sorties", "units", "supply lines")
+- **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("operations", "units", "supply lines", "reserves", "sync tests")
 - **State**: `src/autofoundry/state.py` — SQLite-backed session persistence (WAL mode)
 
 ## Run Modes

@@ -115,17 +115,8 @@ class LambdaLabsProvider:
             regions = info.get("regions_with_capacity_available", [])
 
             if not regions:
-                # Show offer with 0 availability so user sees the GPU type exists
-                offers.append(GpuOffer(
-                    provider=ProviderName.LAMBDALABS,
-                    offer_id=type_name,
-                    gpu_type=display_gpu,
-                    gpu_count=gpu_count,
-                    gpu_ram_gb=gpu_ram,
-                    price_per_hour=price,
-                    region=None,
-                    availability=0,
-                ))
+                # Skip GPU types with no available regions — can't launch them
+                continue
             else:
                 for region in regions:
                     region_name = region.get("name", "unknown")
@@ -190,10 +181,14 @@ class LambdaLabsProvider:
             "ssh_key_names": [ssh_key_name],
         }
 
-        # Use region from metadata if available
+        # Lambda Labs requires a region
         region = config.metadata.get("region_name")
-        if region:
-            payload["region_name"] = region
+        if not region:
+            raise ValueError(
+                f"No region available for {config.gpu_type} on Lambda Labs. "
+                "This GPU type may have no current capacity."
+            )
+        payload["region_name"] = region
 
         if config.name:
             payload["name"] = config.name

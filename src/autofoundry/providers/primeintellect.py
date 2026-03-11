@@ -151,6 +151,14 @@ class PrimeIntellectProvider:
                 "type": meta.get("provider_type", ""),
             },
         }
+        data_center = meta.get("data_center_id")
+        if not data_center:
+            raise ValueError(
+                f"No data_center_id for {config.gpu_type} on PRIME Intellect. "
+                "This may indicate the offer metadata is incomplete."
+            )
+        payload["pod"]["dataCenterId"] = data_center
+
         if meta.get("socket"):
             payload["pod"]["socket"] = meta["socket"]
         if config.disk_gb:
@@ -188,13 +196,25 @@ class PrimeIntellectProvider:
         status = status_map.get(pod.get("status", ""), InstanceStatus.PENDING)
 
         ssh = None
-        ssh_conn = pod.get("sshConnection", {})
-        if ssh_conn and ssh_conn.get("host"):
+        ssh_conn = pod.get("sshConnection")
+        if isinstance(ssh_conn, dict) and ssh_conn.get("host"):
             ssh = SshConnectionInfo(
                 host=ssh_conn["host"],
                 port=ssh_conn.get("port", 22),
                 username=ssh_conn.get("username", "root"),
             )
+        elif isinstance(ssh_conn, str) and ssh_conn:
+            # Parse connection string like "ssh root@host -p 22"
+            import re
+            host_match = re.search(r"@([\w.\-]+)", ssh_conn)
+            port_match = re.search(r"-p\s+(\d+)", ssh_conn)
+            user_match = re.search(r"ssh\s+(\w+)@", ssh_conn)
+            if host_match:
+                ssh = SshConnectionInfo(
+                    host=host_match.group(1),
+                    port=int(port_match.group(1)) if port_match else 22,
+                    username=user_match.group(1) if user_match else "root",
+                )
 
         return InstanceInfo(
             provider=ProviderName.PRIMEINTELLECT,

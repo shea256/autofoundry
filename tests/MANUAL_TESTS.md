@@ -15,7 +15,7 @@ autofoundry run --help
 autofoundry build --help  # expect error
 ```
 
-**Pass:** Help shows config, offers, volumes, run, status, results, teardown. No build command.
+**Pass:** Help shows config, reserves, volumes, run, status, results, teardown. No build command.
 
 ---
 
@@ -30,14 +30,14 @@ autofoundry config
 
 ---
 
-## 3. Browse offers
+## 3. Browse reserves
 
 ```bash
-autofoundry offers
-autofoundry offers --gpu A100
+autofoundry reserves
+autofoundry reserves --gpu A100
 ```
 
-**Pass:** Shows GPU offers from configured providers in a formatted table.
+**Pass:** Shows GPU reserves from configured providers in a formatted table.
 
 ---
 

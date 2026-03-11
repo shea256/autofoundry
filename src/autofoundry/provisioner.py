@@ -39,6 +39,14 @@ PROVIDER_IMAGES: dict[ProviderName, str] = {
 MAX_OFFER_RETRIES = 5
 
 
+class ProvisioningError(Exception):
+    """Error during provisioning that may include a partially-created instance."""
+
+    def __init__(self, message: str, partial_instance: InstanceInfo | None = None):
+        super().__init__(message)
+        self.partial_instance = partial_instance
+
+
 def _provision_one(
     provider: CloudProvider,
     config: InstanceConfig,
@@ -59,22 +67,12 @@ def _provision_one(
         tried_offers.add(current_config.offer_id)
         console.print(
             f"  [af.muted]{label} [{display}] creating "
-            f"(offer {current_config.offer_id[:12]})...[/af.muted]"
+            f"({current_config.gpu_type} {current_config.offer_id[:12]})...[/af.muted]"
         )
 
         try:
             info = provider.create_instance(current_config)
-            console.print(
-                f"  [af.secondary]{label} [{display}] "
-                f"instance {info.instance_id} — waiting for SSH...[/af.secondary]"
-            )
-            info = provider.wait_until_ready(info.instance_id, timeout=900)
-            console.print(
-                f"  [af.success]{label} [{display}] "
-                f"ONLINE @ {info.ssh.host}:{info.ssh.port}[/af.success]"
-            )
-            return info
-
+            break  # Creation succeeded, proceed to wait
         except Exception as e:
             error_msg = str(e).lower()
             # Retryable errors: offer taken, no longer available
@@ -87,7 +85,7 @@ def _provision_one(
                 raise
 
             console.print(
-                f"  [af.muted]{label} [{display}] offer taken, "
+                f"  [af.muted]{label} [{display}] unit taken, "
                 f"finding next available...[/af.muted]"
             )
 
@@ -110,8 +108,25 @@ def _provision_one(
             current_config = current_config.model_copy(
                 update={"offer_id": next_offer.offer_id}
             )
+    else:
+        raise RuntimeError(f"Failed to provision {label} after {MAX_OFFER_RETRIES} attempts")
 
-    raise RuntimeError(f"Failed to provision {label} after {MAX_OFFER_RETRIES} attempts")
+    # Instance created — wait for SSH. If wait fails, attach the instance ID
+    # to the error so the caller can still track it for cleanup.
+    console.print(
+        f"  [af.secondary]{label} [{display}] "
+        f"instance {info.instance_id} — waiting for SSH...[/af.secondary]"
+    )
+    try:
+        info = provider.wait_until_ready(info.instance_id, timeout=900)
+    except Exception as e:
+        raise ProvisioningError(str(e), partial_instance=info) from e
+
+    console.print(
+        f"  [af.success]{label} [{display}] "
+        f"ONLINE @ {info.ssh.host}:{info.ssh.port}[/af.success]"
+    )
+    return info
 
 
 def provision_instances(
@@ -181,6 +196,16 @@ def provision_instances(
                 )
                 instances.append(info)
                 store.add_instance(info)
+            except ProvisioningError as e:
+                failed += 1
+                print_error(f"UNIT-{num:02d} failed: {e}")
+                # Track partially-created instances so they get cleaned up
+                if e.partial_instance:
+                    partial = e.partial_instance.model_copy(
+                        update={"created_at": datetime.now()}
+                    )
+                    instances.append(partial)
+                    store.add_instance(partial)
             except Exception as e:
                 failed += 1
                 print_error(f"UNIT-{num:02d} failed: {e}")
