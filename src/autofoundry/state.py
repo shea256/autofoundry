@@ -296,4 +296,8 @@ class SessionStore:
         """List all session IDs from the sessions directory."""
         if not SESSIONS_DIR.exists():
             return []
-        return sorted(p.stem for p in SESSIONS_DIR.glob("*.db"))
+        def _natural_key(name: str) -> list[int | str]:
+            import re
+            return [int(part) if part.isdigit() else part for part in re.split(r'(\d+)', name)]
+
+        return sorted((p.stem for p in SESSIONS_DIR.glob("*.db")), key=_natural_key)
