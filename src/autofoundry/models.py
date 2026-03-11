@@ -61,6 +61,17 @@ class GpuOffer(BaseModel):
     )
 
 
+class VolumeInfo(BaseModel):
+    """A persistent network volume on a cloud provider."""
+
+    provider: ProviderName
+    volume_id: str
+    name: str
+    size_gb: int
+    region: str = ""
+    mount_path: str = ""
+
+
 class InstanceConfig(BaseModel):
     """Configuration for creating a cloud instance."""
 
@@ -71,6 +82,7 @@ class InstanceConfig(BaseModel):
     disk_gb: int = 50
     ssh_public_key: str = ""
     offer_id: str = ""  # Provider-specific offer/GPU ID for creation
+    volume_id: str = ""  # Network volume to attach (provider-specific ID)
     metadata: dict[str, str] = Field(
         default_factory=dict,
         description="Provider-specific fields passed through from GpuOffer",

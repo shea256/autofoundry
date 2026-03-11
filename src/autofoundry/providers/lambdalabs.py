@@ -14,6 +14,7 @@ from autofoundry.models import (
     InstanceStatus,
     ProviderName,
     SshConnectionInfo,
+    VolumeInfo,
 )
 
 
@@ -143,6 +144,43 @@ class LambdaLabsProvider:
 
         return offers
 
+    def list_volumes(self) -> list[VolumeInfo]:
+        """List all persistent filesystems."""
+        resp = self._client.get("/file-systems")
+        resp.raise_for_status()
+        filesystems = resp.json().get("data", [])
+        return [
+            VolumeInfo(
+                provider=ProviderName.LAMBDALABS,
+                volume_id=fs["id"],
+                name=fs.get("name", ""),
+                size_gb=fs.get("bytes_used", 0) // (1024**3),
+                region=fs.get("region", {}).get("name", ""),
+                mount_path="/lambda/nfs/persistent-storage",
+            )
+            for fs in filesystems
+        ]
+
+    def create_volume(self, name: str, region: str) -> VolumeInfo:
+        """Create a new persistent filesystem."""
+        resp = self._client.post(
+            "/file-systems",
+            json={"name": name, "region": region},
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"Lambda Labs create filesystem failed: {resp.status_code} {resp.text}"
+            )
+        fs = resp.json().get("data", {})
+        return VolumeInfo(
+            provider=ProviderName.LAMBDALABS,
+            volume_id=fs["id"],
+            name=name,
+            size_gb=0,
+            region=region,
+            mount_path="/lambda/nfs/persistent-storage",
+        )
+
     def create_instance(self, config: InstanceConfig) -> InstanceInfo:
         # Ensure SSH key is registered
         ssh_key_name = self._ensure_ssh_key(config.ssh_public_key)
@@ -159,6 +197,10 @@ class LambdaLabsProvider:
 
         if config.name:
             payload["name"] = config.name
+
+        # Attach filesystem if specified
+        if config.volume_id:
+            payload["file_system_names"] = [config.volume_id]
 
         resp = self._client.post("/instance-operations/launch", json=payload)
         if resp.status_code >= 300:

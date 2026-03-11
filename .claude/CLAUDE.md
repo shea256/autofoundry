@@ -9,11 +9,16 @@ CLI companion to Karpathy's autoresearch. Run ANY ML experiment script across GP
 cli.py → planner.py → provisioner.py → executor.py → reporter.py
 ```
 
-- **Models**: `src/autofoundry/models.py` — GpuOffer, InstanceConfig, InstanceInfo, ProvisioningPlan
+- **Models**: `src/autofoundry/models.py` — GpuOffer, InstanceConfig, InstanceInfo, VolumeInfo, ProvisioningPlan
 - **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml`
-- **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect}.py`
+- **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect,lambdalabs}.py`
 - **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("sorties", "units", "supply lines")
 - **State**: `src/autofoundry/state.py` — Session persistence
+
+## Run Modes
+1. **Scratch** — self-contained script installs everything from zero (e.g. `run_autoresearch.sh`). Simplest, always works.
+2. **Network volumes** — `--volume my-vol` attaches persistent storage. First run installs deps to volume, subsequent runs skip setup.
+3. **Start/stop** — keep instances alive between experiments via stop/resume. Fastest iteration.
 
 ## Provider API Details
 
@@ -27,6 +32,8 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - `ports` field in pod creation must be an array: `["22/tcp"]` not `"22/tcp"`
 - GraphQL `gpuTypes` query does NOT support `maxGpuCount` field
 - Provider image: `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`
+- **Network volumes**: REST `POST /networkvolumes` to create, GraphQL `myself { networkVolumes }` to list
+- Attach via `networkVolumeId` in pod creation payload, mounts at `/workspace`
 
 ### Vast.ai
 - Response uses `"bundles"` key (not `"offers"`)
@@ -41,6 +48,14 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - Null safety: use `str(item.get("field") or "")` for metadata dict values (Pydantic rejects None in `dict[str, str]`)
 - Provider image: `cuda_12_4_pytorch_2_4`
 
+### Lambda Labs
+- API: `https://cloud.lambdalabs.com/api/v1`, basic auth (API key as username)
+- `_ensure_ssh_key()` — register SSH key, retries with hash-based name on conflict
+- Bare metal VMs, no Docker image field — uses provider's pre-configured Ubuntu image
+- **Persistent filesystems**: `POST /file-systems` to create, `GET /file-systems` to list
+- Attach via `file_system_names` in launch payload, mounts at `/lambda/nfs/persistent-storage`
+- Region handling: each region is separate offer with metadata
+
 ## SSH Execution
 - `executor.py` uses subprocess SSH/SCP (not asyncssh)
 - `BatchMode=yes` + `PasswordAuthentication=no` prevent password prompt hangs
@@ -48,11 +63,12 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - SSH retry loop (10 attempts, 5s delay) before upload — key auth can lag behind port availability
 - Metadata passthrough: `GpuOffer.metadata` → `InstanceConfig.metadata` → provider's `create_instance`
 
-## Test Script
-- `reference/scripts/run_autoresearch.sh` — clones autoresearch, installs uv, runs prepare.py + train.py
+## Scripts
+- `scripts/run_autoresearch.sh` — clone, install deps, run. Works from scratch or with volumes (pulls on re-run).
 - Script outputs `---` delimiter followed by `key: value` metrics, parsed by `executor.parse_metrics()`
 
 ## Status
-- RunPod: fully working (provision, execute, stream, report, teardown) ✓
+- RunPod: fully working (provision, execute, stream, report, teardown, volumes) ✓
+- Lambda Labs: GPU listing works, provisioning + volumes untested
 - Vast.ai: GPU listing works, provisioning untested
 - PRIME Intellect: GPU listing works (inventory fluctuates), provisioning untested

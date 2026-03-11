@@ -21,7 +21,26 @@ from autofoundry.theme import (
     print_success,
 )
 
-app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
+app = typer.Typer(add_completion=False, pretty_exceptions_enable=False, invoke_without_command=True)
+
+
+@app.callback()
+def _default(ctx: typer.Context) -> None:
+    """Run ML experiments across GPU clouds."""
+    if ctx.invoked_subcommand is None:
+        print_banner(version=__version__)
+        console.print()
+        console.print("  [af.muted]COMMANDS:[/af.muted]")
+        console.print("    [af.secondary]config[/af.secondary]    Configure API keys, SSH key, and default GPU type")
+        console.print("    [af.secondary]offers[/af.secondary]    Browse GPU offers across providers")
+        console.print("    [af.secondary]volumes[/af.secondary]   List network volumes across providers")
+        console.print("    [af.secondary]run[/af.secondary]       Launch GPU experiment orchestration engine")
+        console.print("    [af.secondary]status[/af.secondary]    Show status of operations and instances")
+        console.print("    [af.secondary]results[/af.secondary]   View experiment results and metrics")
+        console.print("    [af.secondary]teardown[/af.secondary]  Terminate all instances for an operation")
+        console.print()
+        console.print("  [af.muted]Run[/af.muted] [af.primary]autofoundry <command> --help[/af.primary] [af.muted]for details.[/af.muted]")
+        console.print()
 
 
 def _load_or_setup_config() -> Config:
@@ -94,45 +113,130 @@ def _show_session_summary(session: Session) -> None:
     console.print()
 
 
-@app.command()
-def build(
-    setup_script: str = typer.Argument(..., help="Path to a setup script that installs dependencies"),
-    tag: str = typer.Option(..., "--tag", "-t", help="Docker image tag (e.g. user/autoresearch:latest)"),
-    base: str = typer.Option(None, "--base", "-b", help="Base Docker image to build on"),
+@app.command(context_settings={"help_option_names": []})
+def config(
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
 ) -> None:
-    """Build a Docker image with pre-installed dependencies for faster runs."""
-    from autofoundry.image_builder import DEFAULT_BASE_IMAGE, build_and_push
+    """Configure API keys, SSH key, and default GPU type."""
+    if help_:
+        _print_command_help("autofoundry config", "Configure API keys, SSH key, and default GPU type", [
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    existing = Config.load()
+    first_run_setup(existing)
 
-    print_banner(version=__version__)
 
-    path = Path(setup_script).expanduser().resolve()
-    if not path.exists() or not path.is_file():
-        print_error(f"File not found: {path}")
-        raise typer.Exit(1)
+def _resolve_volume(
+    config: Config, volume_name: str, plan_providers: set,
+) -> str:
+    """Resolve a volume name to a volume ID, creating if necessary.
 
-    base_image = base or DEFAULT_BASE_IMAGE
+    Returns the volume ID string, or empty string if volumes aren't supported.
+    """
+    from autofoundry.models import ProviderName
+    from autofoundry.providers import get_provider
 
-    if not build_and_push(path, tag, base_image):
-        raise typer.Exit(1)
+    VOLUME_PROVIDERS = {ProviderName.RUNPOD, ProviderName.LAMBDALABS}
+    eligible = plan_providers & VOLUME_PROVIDERS
 
-    # Save last-built image for easy reuse
-    config = _load_or_setup_config()
-    config.last_image = tag
-    config.save()
+    if not eligible:
+        unsupported = ", ".join(p.value for p in plan_providers)
+        print_error(f"Network volumes not supported on: {unsupported}")
+        return ""
 
+    # Use the first eligible provider (typically only one provider per plan)
+    provider_name = next(iter(eligible))
+    provider = get_provider(provider_name, config.api_keys[provider_name])
+
+    if not hasattr(provider, "list_volumes"):
+        print_error(f"Volume support not implemented for {provider_name.value}")
+        return ""
+
+    # Check for existing volume with this name
+    console.print(f"  [af.muted]Checking for volume '{volume_name}'...[/af.muted]")
+    volumes = provider.list_volumes()
+    for vol in volumes:
+        if vol.name == volume_name:
+            print_success(f"Found volume: {vol.name} ({vol.size_gb}GB, {vol.region})")
+            print_status("Mount path", vol.mount_path)
+            return vol.volume_id
+
+    # Volume doesn't exist — create it
+    console.print(f"  [af.muted]Volume '{volume_name}' not found. Creating...[/af.muted]")
     console.print()
-    print_success(f"Use this image with: autofoundry run <script> --image {tag}")
+
+    from rich.prompt import Confirm as RichConfirm
+
+    size_gb = IntPrompt.ask(
+        "  [af.label]Volume size (GB)[/af.label]",
+        default=100,
+    )
+
+    if provider_name == ProviderName.RUNPOD:
+        region = Prompt.ask(
+            "  [af.label]Data center ID[/af.label]",
+            default="US-TX-3",
+        )
+        if not RichConfirm.ask(
+            f"  [af.label]Create {size_gb}GB volume in {region}?[/af.label]",
+            default=True,
+        ):
+            return ""
+        vol = provider.create_volume(volume_name, size_gb, region)
+    elif provider_name == ProviderName.LAMBDALABS:
+        region = Prompt.ask(
+            "  [af.label]Region[/af.label]",
+            default="us-east-1",
+        )
+        if not RichConfirm.ask(
+            f"  [af.label]Create volume '{volume_name}' in {region}?[/af.label]",
+            default=True,
+        ):
+            return ""
+        vol = provider.create_volume(volume_name, region)
+    else:
+        return ""
+
+    print_success(f"Volume created: {vol.name} ({vol.volume_id})")
+    print_status("Mount path", vol.mount_path)
+    return vol.volume_id
 
 
-@app.command()
+def _print_command_help(command: str, description: str, options: list[tuple[str, str]]) -> None:
+    """Print themed help for a command."""
+    print_banner(version=__version__)
+    console.print()
+    console.print(f"  [af.primary]{command}[/af.primary] — [af.muted]{description}[/af.muted]")
+    console.print()
+    console.print("  [af.muted]OPTIONS:[/af.muted]")
+    for flags, desc in options:
+        console.print(f"    [af.secondary]{flags:<24}[/af.secondary] {desc}")
+    console.print()
+
+
+@app.command(context_settings={"help_option_names": []})
 def run(
+    ctx: typer.Context,
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
     script: str = typer.Argument(None, help="Path to the script to run on GPU instances"),
     resume: str = typer.Option(None, "--resume", "-r", help="Resume a previous operation"),
     num: int = typer.Option(None, "--num", "-n", help="Number of experiment runs"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type (e.g. H100)"),
-    image: str = typer.Option(None, "--image", "-i", help="Custom Docker image to use (e.g. user/repo:tag)"),
+    volume: str = typer.Option(None, "--volume", "-v", help="Network volume name (creates if needed)"),
 ) -> None:
     """Launch autofoundry — GPU experiment orchestration engine."""
+    if help_:
+        _print_command_help("autofoundry run", "GPU experiment orchestration engine", [
+            ("[SCRIPT]", "Path to the script to run on GPU instances"),
+            ("--resume, -r TEXT", "Resume a previous operation"),
+            ("--num, -n INTEGER", "Number of experiment runs"),
+            ("--gpu, -g TEXT", "GPU type (e.g. H100)"),
+            ("--volume, -v TEXT", "Network volume name (creates if needed)"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+
     print_banner(version=__version__)
 
     config = _load_or_setup_config()
@@ -263,21 +367,6 @@ def run(
     if gpu is not None:
         gpu_type = gpu
 
-    # Resolve custom image: CLI flag > interactive prompt
-    custom_image = image
-    if not custom_image and config.last_image:
-        from rich.prompt import Confirm as RichConfirm
-
-        console.print()
-        console.print(
-            f"  [af.muted]Last built image: {config.last_image}[/af.muted]"
-        )
-        if RichConfirm.ask(
-            "  [af.label]Use pre-built image? (faster startup)[/af.label]",
-            default=True,
-        ):
-            custom_image = config.last_image
-
     # Remember script for next time
     config.last_script = script_path
 
@@ -297,11 +386,9 @@ def run(
     store.create_experiments(num_experiments)
     store.log_event("session_created", {"script_path": script_path, "gpu_type": gpu_type})
 
-    if custom_image:
-        print_status("Image", custom_image)
     _show_session_summary(session)
 
-    # Planning
+    # Planning — select providers/offers
     from autofoundry.planner import interactive_plan
 
     plan = interactive_plan(config, gpu_type, num_experiments, script_path)
@@ -309,6 +396,15 @@ def run(
         store.update_session_status(SessionStatus.FAILED)
         store.close()
         raise typer.Exit(1)
+
+    # Resolve network volume if requested
+    volume_id = ""
+    if volume:
+        plan_providers = {offer.provider for offer, _ in plan.offers}
+        console.print()
+        volume_id = _resolve_volume(config, volume, plan_providers)
+        if volume_id:
+            console.print()
 
     store.update_session_status(SessionStatus.PROVISIONING)
 
@@ -321,8 +417,8 @@ def run(
 
     instances = provision_instances(
         config, plan, session_id, store,
-        custom_image=custom_image,
         gpu_type_filter=gpu_type,
+        volume_id=volume_id,
     )
     if not instances:
         print_error("No instances came online. Aborting.")
@@ -393,6 +489,288 @@ def run(
         print_status("Resume", f"autofoundry run --resume {session_id}")
 
     store.close()
+
+
+@app.command(context_settings={"help_option_names": []})
+def volumes(
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """List network volumes across all configured providers."""
+    if help_:
+        _print_command_help("autofoundry volumes", "List network volumes across providers", [
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    from autofoundry.models import ProviderName
+    from autofoundry.providers import get_provider
+    from autofoundry.theme import make_table
+
+    print_banner(version=__version__)
+    config = _load_or_setup_config()
+
+    VOLUME_PROVIDERS = {ProviderName.RUNPOD, ProviderName.LAMBDALABS}
+    eligible = [p for p in config.configured_providers if p in VOLUME_PROVIDERS]
+
+    if not eligible:
+        console.print("  [af.muted]No providers with volume support configured.[/af.muted]")
+        console.print("  [af.muted]Supported: RunPod, Lambda Labs[/af.muted]")
+        return
+
+    all_volumes = []
+    for provider_name in eligible:
+        provider = get_provider(provider_name, config.api_keys[provider_name])
+        if hasattr(provider, "list_volumes"):
+            try:
+                vols = provider.list_volumes()
+                all_volumes.extend(vols)
+            except Exception as e:
+                print_error(f"Failed to list volumes for {provider_name.value}: {e}")
+
+    if not all_volumes:
+        console.print("  [af.muted]No volumes found.[/af.muted]")
+        return
+
+    table = make_table("NETWORK VOLUMES", [
+        ("Provider", "af.secondary"),
+        ("Name", "af.primary"),
+        ("Size", ""),
+        ("Region", ""),
+        ("Mount Path", "af.muted"),
+        ("ID", "af.muted"),
+    ])
+
+    for vol in all_volumes:
+        from autofoundry.config import PROVIDER_DISPLAY
+
+        table.add_row(
+            PROVIDER_DISPLAY.get(vol.provider, vol.provider.value),
+            vol.name,
+            f"{vol.size_gb}GB",
+            vol.region,
+            vol.mount_path,
+            vol.volume_id[:12],
+        )
+
+    console.print(table)
+    console.print()
+
+
+@app.command(context_settings={"help_option_names": []})
+def offers(
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+    gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type to filter (e.g. H100)"),
+) -> None:
+    """Browse GPU offers across all configured providers."""
+    if help_:
+        _print_command_help("autofoundry offers", "Browse GPU offers across providers", [
+            ("--gpu, -g TEXT", "GPU type to filter (e.g. H100)"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    from autofoundry.planner import display_offers, query_all_offers
+
+    print_banner(version=__version__)
+    config = _load_or_setup_config()
+
+    gpu_type = gpu or config.default_gpu_type
+    print_status("Searching for", gpu_type)
+    console.print()
+
+    all_offers = query_all_offers(config, gpu_type)
+    if not all_offers:
+        print_error(f"No offers found for {gpu_type}")
+        raise typer.Exit(1)
+
+    display_offers(all_offers)
+
+
+@app.command(context_settings={"help_option_names": []})
+def status(
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+    session_id: str = typer.Argument(None, help="Operation ID (default: most recent)"),
+) -> None:
+    """Show status of operations and their instances."""
+    if help_:
+        _print_command_help("autofoundry status", "Show status of operations and instances", [
+            ("[SESSION_ID]", "Operation ID (default: all operations)"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    print_banner(version=__version__)
+
+    sessions = SessionStore.list_sessions()
+    if not sessions:
+        console.print("  [af.muted]No operations found.[/af.muted]")
+        return
+
+    if session_id is None:
+        # Show all sessions
+        print_header(f"{TERMS['session']} STATUS")
+        console.print()
+        for sid in sessions:
+            store = SessionStore(sid)
+            session = store.get_session()
+            if session:
+                status_style = "af.success" if session.status == SessionStatus.COMPLETED else "af.primary"
+                print_status(sid, f"{session.status.value} — {session.gpu_type} — {session.total_experiments} {TERMS['experiments'].lower()}", style=status_style)
+            store.close()
+        console.print()
+        return
+
+    if session_id not in sessions:
+        print_error(f"Operation '{session_id}' not found")
+        print_status("Available", ", ".join(sessions) if sessions else "(none)")
+        raise typer.Exit(1)
+
+    store = SessionStore(session_id)
+    session = store.get_session()
+    if session is None:
+        print_error(f"Could not load operation '{session_id}'")
+        store.close()
+        raise typer.Exit(1)
+
+    _show_session_summary(session)
+    print_status("Status", session.status.value)
+
+    instances = store.get_instances()
+    if instances:
+        console.print()
+        print_header(f"{TERMS['instances']}")
+        console.print()
+        for inst in instances:
+            ssh_info = f" — {inst.ssh.host}:{inst.ssh.port}" if inst.ssh else ""
+            print_status(inst.instance_id, f"{inst.provider.value} {inst.gpu_type} [{inst.status.value}]{ssh_info}")
+
+    completed = store.get_completed_experiments()
+    pending = store.get_pending_experiments()
+    console.print()
+    print_status("Completed", str(len(completed)))
+    print_status("Pending", str(len(pending)))
+
+    store.close()
+
+
+@app.command(context_settings={"help_option_names": []})
+def results(
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+    session_id: str = typer.Argument(None, help="Operation ID (default: most recent)"),
+) -> None:
+    """View experiment results and metrics from a completed operation."""
+    if help_:
+        _print_command_help("autofoundry results", "View experiment results and metrics", [
+            ("[SESSION_ID]", "Operation ID (default: most recent)"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    from autofoundry.executor import ExperimentRun
+    from autofoundry.models import InstanceInfo, InstanceStatus, ProviderName
+
+    print_banner(version=__version__)
+
+    sessions = SessionStore.list_sessions()
+    if not sessions:
+        console.print("  [af.muted]No operations found.[/af.muted]")
+        return
+
+    # Default to most recent session
+    if session_id is None:
+        session_id = sessions[-1]
+
+    if session_id not in sessions:
+        print_error(f"Operation '{session_id}' not found")
+        print_status("Available", ", ".join(sessions) if sessions else "(none)")
+        raise typer.Exit(1)
+
+    store = SessionStore(session_id)
+    session = store.get_session()
+    if session is None:
+        print_error(f"Could not load operation '{session_id}'")
+        store.close()
+        raise typer.Exit(1)
+
+    _show_session_summary(session)
+
+    completed = store.get_completed_experiments()
+    if not completed:
+        console.print("  [af.muted]No completed experiments yet.[/af.muted]")
+        store.close()
+        return
+
+    # Build instance lookup from stored instances
+    instances_by_id = {inst.instance_id: inst for inst in store.get_instances()}
+
+    # Convert ExperimentResult → ExperimentRun for the reporter
+    from autofoundry.reporter import print_report
+
+    placeholder = InstanceInfo(
+        provider=ProviderName.RUNPOD, instance_id="unknown", name="unknown",
+        status=InstanceStatus.DELETED, gpu_type=session.gpu_type,
+    )
+    runs = []
+    for exp in completed:
+        instance = instances_by_id.get(exp.instance_id, placeholder)
+        runs.append(ExperimentRun(
+            instance=instance,
+            experiment_index=exp.run_index,
+            exit_code=exp.exit_code,
+            metrics=exp.metrics,
+            output_lines=exp.raw_output.splitlines() if exp.raw_output else [],
+        ))
+
+    print_report(runs)
+    store.close()
+
+
+@app.command(context_settings={"help_option_names": []})
+def teardown(
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+    session_id: str = typer.Argument(None, help="Operation ID to tear down"),
+) -> None:
+    """Terminate all instances for an operation."""
+    if help_:
+        _print_command_help("autofoundry teardown", "Terminate all instances for an operation", [
+            ("SESSION_ID", "Operation ID to tear down (required)"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    if session_id is None:
+        print_error("SESSION_ID is required")
+        raise typer.Exit(1)
+    from autofoundry.provisioner import teardown_instances as do_teardown
+
+    print_banner(version=__version__)
+    config = _load_or_setup_config()
+
+    sessions = SessionStore.list_sessions()
+    if session_id not in sessions:
+        print_error(f"Operation '{session_id}' not found")
+        print_status("Available", ", ".join(sessions) if sessions else "(none)")
+        raise typer.Exit(1)
+
+    store = SessionStore(session_id)
+    instances = store.get_instances()
+
+    if not instances:
+        console.print("  [af.muted]No instances found for this operation.[/af.muted]")
+        store.close()
+        return
+
+    console.print(f"  [af.primary]{len(instances)} {TERMS['instances'].lower()} to terminate:[/af.primary]")
+    for inst in instances:
+        print_status(inst.instance_id, f"{inst.provider.value} {inst.gpu_type} [{inst.status.value}]")
+    console.print()
+
+    from rich.prompt import Confirm as RichConfirm
+
+    if not RichConfirm.ask("  [af.alert]Confirm termination?[/af.alert]", default=False):
+        console.print("  [af.muted]Aborted.[/af.muted]")
+        store.close()
+        return
+
+    do_teardown(config, instances)
+    store.update_session_status(SessionStatus.COMPLETED)
+    store.close()
+    print_success(f"Operation {session_id} terminated")
 
 
 def main() -> None:

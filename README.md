@@ -59,7 +59,7 @@ Autofoundry aggregates these across all experiment runs in the final report.
 ## Example: autoresearch
 
 ```bash
-uv run autofoundry scripts/run_autoresearch.sh
+uv run autofoundry run scripts/run_autoresearch.sh
 ```
 
 This provisions an H100, clones autoresearch, trains a 50M parameter language model, and reports metrics including validation BPB, MFU, and throughput.
