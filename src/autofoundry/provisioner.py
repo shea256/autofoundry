@@ -21,6 +21,7 @@ from autofoundry.state import SessionStore
 from autofoundry.theme import (
     TERMS,
     console,
+    display_status,
     print_error,
     print_header,
     print_success,
@@ -210,7 +211,7 @@ def restart_instances(
     Instances that are already running are included as-is.
     Lost instances (deleted/errored) are reported.
     """
-    print_header("REACTIVATION SEQUENCE")
+    print_header("REACTIVATION TEST")
     console.print()
 
     if not stored_instances:
@@ -268,7 +269,7 @@ def restart_instances(
             else:
                 console.print(
                     f"  [af.muted]{label} [{display}] "
-                    f"status: {current.status.value} — skipping[/af.muted]"
+                    f"status: {display_status(current.status.value)} — skipping[/af.muted]"
                 )
                 lost += 1
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import click
 import typer
 from rich.prompt import IntPrompt, Prompt
 
@@ -14,6 +15,7 @@ from autofoundry.state import SessionStore
 from autofoundry.theme import (
     TERMS,
     console,
+    display_status,
     print_banner,
     print_error,
     print_header,
@@ -21,18 +23,26 @@ from autofoundry.theme import (
     print_success,
 )
 
-app = typer.Typer(add_completion=False, pretty_exceptions_enable=False, invoke_without_command=True)
+
+app = typer.Typer(
+    add_completion=False,
+    pretty_exceptions_enable=False,
+    invoke_without_command=True,
+)
 
 
-@app.callback()
-def _default(ctx: typer.Context) -> None:
+@app.callback(context_settings={"help_option_names": []})
+def _default(
+    ctx: typer.Context,
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
     """Run ML experiments across GPU clouds."""
-    if ctx.invoked_subcommand is None:
+    if help_ or ctx.invoked_subcommand is None:
         print_banner(version=__version__)
         console.print()
         console.print("  [af.muted]COMMANDS:[/af.muted]")
         console.print("    [af.secondary]config[/af.secondary]    Configure API keys, SSH key, and default GPU type")
-        console.print("    [af.secondary]offers[/af.secondary]    Browse GPU offers across providers")
+        console.print("    [af.secondary]reserves[/af.secondary]  Browse GPU reserves across supply lines")
         console.print("    [af.secondary]volumes[/af.secondary]   List network volumes across providers")
         console.print("    [af.secondary]run[/af.secondary]       Launch GPU experiment orchestration engine")
         console.print("    [af.secondary]status[/af.secondary]    Show status of operations and instances")
@@ -41,6 +51,8 @@ def _default(ctx: typer.Context) -> None:
         console.print()
         console.print("  [af.muted]Run[/af.muted] [af.primary]autofoundry <command> --help[/af.primary] [af.muted]for details.[/af.muted]")
         console.print()
+        if help_:
+            raise typer.Exit()
 
 
 def _load_or_setup_config() -> Config:
@@ -345,14 +357,14 @@ def run(
         if action == "stop":
             stop_instances(config, instances)
             store.update_session_status(SessionStatus.PAUSED)
-            print_status("Status", "PAUSED — units stopped, disk preserved")
+            print_status("Status", "STANDBY — units stopped, disk preserved")
             print_status("Resume", f"autofoundry run --resume {resume}")
         elif action == "terminate":
             teardown_instances(config, instances)
             store.update_session_status(SessionStatus.COMPLETED)
         else:
             store.update_session_status(SessionStatus.PAUSED)
-            print_status("Status", "PAUSED — units still running")
+            print_status("Status", "STANDBY — units still running")
             print_status("Resume", f"autofoundry run --resume {resume}")
 
         store.close()
@@ -478,14 +490,14 @@ def run(
     if action == "stop":
         stop_instances(config, instances)
         store.update_session_status(SessionStatus.PAUSED)
-        print_status("Status", "PAUSED — units stopped, disk preserved")
+        print_status("Status", "STANDBY — units stopped, disk preserved")
         print_status("Resume", f"autofoundry run --resume {session_id}")
     elif action == "terminate":
         teardown_instances(config, instances)
         store.update_session_status(SessionStatus.COMPLETED)
     else:
         store.update_session_status(SessionStatus.PAUSED)
-        print_status("Status", "PAUSED — units still running")
+        print_status("Status", "STANDBY — units still running")
         print_status("Resume", f"autofoundry run --resume {session_id}")
 
     store.close()
@@ -556,13 +568,13 @@ def volumes(
 
 
 @app.command(context_settings={"help_option_names": []})
-def offers(
+def reserves(
     help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type to filter (e.g. H100)"),
 ) -> None:
-    """Browse GPU offers across all configured providers."""
+    """Browse GPU reserves across all configured supply lines."""
     if help_:
-        _print_command_help("autofoundry offers", "Browse GPU offers across providers", [
+        _print_command_help("autofoundry reserves", "Browse GPU reserves across supply lines", [
             ("--gpu, -g TEXT", "GPU type to filter (e.g. H100)"),
             ("--help, -h", "Show this help"),
         ])
@@ -578,7 +590,7 @@ def offers(
 
     all_offers = query_all_offers(config, gpu_type)
     if not all_offers:
-        print_error(f"No offers found for {gpu_type}")
+        print_error(f"No reserves found for {gpu_type}")
         raise typer.Exit(1)
 
     display_offers(all_offers)
@@ -612,7 +624,7 @@ def status(
             session = store.get_session()
             if session:
                 status_style = "af.success" if session.status == SessionStatus.COMPLETED else "af.primary"
-                print_status(sid, f"{session.status.value} — {session.gpu_type} — {session.total_experiments} {TERMS['experiments'].lower()}", style=status_style)
+                print_status(sid, f"{display_status(session.status.value)} — {session.gpu_type} — {session.total_experiments} {TERMS['experiments'].lower()}", style=status_style)
             store.close()
         console.print()
         return
@@ -630,7 +642,7 @@ def status(
         raise typer.Exit(1)
 
     _show_session_summary(session)
-    print_status("Status", session.status.value)
+    print_status("Status", display_status(session.status.value))
 
     instances = store.get_instances()
     if instances:
@@ -639,7 +651,7 @@ def status(
         console.print()
         for inst in instances:
             ssh_info = f" — {inst.ssh.host}:{inst.ssh.port}" if inst.ssh else ""
-            print_status(inst.instance_id, f"{inst.provider.value} {inst.gpu_type} [{inst.status.value}]{ssh_info}")
+            print_status(inst.instance_id, f"{inst.provider.value} {inst.gpu_type} [{display_status(inst.status.value)}]{ssh_info}")
 
     completed = store.get_completed_experiments()
     pending = store.get_pending_experiments()
@@ -757,7 +769,7 @@ def teardown(
 
     console.print(f"  [af.primary]{len(instances)} {TERMS['instances'].lower()} to terminate:[/af.primary]")
     for inst in instances:
-        print_status(inst.instance_id, f"{inst.provider.value} {inst.gpu_type} [{inst.status.value}]")
+        print_status(inst.instance_id, f"{inst.provider.value} {inst.gpu_type} [{display_status(inst.status.value)}]")
     console.print()
 
     from rich.prompt import Confirm as RichConfirm
@@ -774,4 +786,11 @@ def teardown(
 
 
 def main() -> None:
-    app()
+    try:
+        app(standalone_mode=False)
+    except click.exceptions.UsageError as e:
+        print_banner(version=__version__)
+        console.print()
+        print_error(str(e))
+        console.print()
+        raise SystemExit(e.exit_code) from None

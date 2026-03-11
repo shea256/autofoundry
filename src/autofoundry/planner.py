@@ -95,7 +95,7 @@ def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
         display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
         table = make_table(
-            f"{display_name} — {len(provider_offers)} offers",
+            f"{display_name} — {len(provider_offers)} {TERMS['offers'].lower()}",
             [
                 ("#", "af.muted"),
                 ("GPU", ""),

@@ -20,15 +20,27 @@ COLORS = {
 TERMS = {
     "instance": "UNIT",
     "instances": "UNITS",
-    "experiment": "SORTIE",
-    "experiments": "SORTIES",
-    "provisioning": "ACTIVATION SEQUENCE",
+    "experiment": "SYNC TEST",
+    "experiments": "SYNC TESTS",
+    "provisioning": "ACTIVATION TEST",
     "results": "INSTRUMENTALITY REPORT",
     "session": "OPERATION",
     "dashboard": "COMMAND CENTER",
     "provider": "SUPPLY LINE",
     "planning": "TACTICAL ASSESSMENT",
     "shutdown": "TERMINATION PROTOCOL",
+    "offers": "RESERVES",
+}
+
+# Display names for InstanceStatus values
+INSTANCE_STATUS_DISPLAY = {
+    "pending": "RESERVES",
+    "starting": "ACTIVATION",
+    "running": "DEPLOYED",
+    "stopping": "STANDING DOWN",
+    "stopped": "STANDBY",
+    "error": "ERROR",
+    "deleted": "TERMINATED",
 }
 
 THEME = Theme({
@@ -70,6 +82,27 @@ BANNER = r"""[af.primary]
     ║                                           ║
     ╚═══════════════════════════════════════════╝
 [/af.primary]"""
+
+SESSION_STATUS_DISPLAY = {
+    "configuring": "CONFIGURING",
+    "planning": "TACTICAL ASSESSMENT",
+    "provisioning": "ACTIVATION TEST",
+    "running": "DEPLOYED",
+    "paused": "STANDBY",
+    "reporting": "REPORTING",
+    "completed": "COMPLETED",
+    "failed": "FAILED",
+}
+
+
+def display_status(status_value: str) -> str:
+    """Map an internal status value to its themed display name."""
+    return (
+        INSTANCE_STATUS_DISPLAY.get(status_value)
+        or SESSION_STATUS_DISPLAY.get(status_value)
+        or status_value.upper()
+    )
+
 
 def print_banner(version: str = "0.1.0", compact: bool = True) -> None:
     """Print the startup banner."""

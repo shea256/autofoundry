@@ -288,7 +288,8 @@ class RunPodProvider:
         while time.time() < deadline:
             info = self.get_instance(instance_id)
             # Log status changes so user can see progress
-            status_str = f"{info.status.value}"
+            from autofoundry.theme import display_status
+            status_str = display_status(info.status.value)
             if info.ssh:
                 status_str += f" ssh={info.ssh.host}:{info.ssh.port}"
             if status_str != last_status:
