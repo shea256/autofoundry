@@ -98,7 +98,8 @@ def _provision_one(
             # Retryable errors: offer taken, no longer available
             retryable = any(kw in error_msg for kw in (
                 "no_such_ask", "not found", "no longer available",
-                "unavailable", "already rented",
+                "unavailable", "already rented", "insufficient capacity",
+                "try again later", "out of stock", "503",
             ))
 
             if not retryable or attempt >= MAX_OFFER_RETRIES - 1:
