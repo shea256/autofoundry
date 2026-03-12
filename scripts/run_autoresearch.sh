@@ -5,10 +5,13 @@
 set -e
 
 # Ensure ~/.config is writable (PI's Ubuntu image has broken perms)
-mkdir -p "$HOME/.config" 2>/dev/null || {
+mkdir -p "$HOME/.config" 2>/dev/null
+if ! touch "$HOME/.config/.writetest" 2>/dev/null; then
     export XDG_CONFIG_HOME=/tmp/xdg_config
     mkdir -p "$XDG_CONFIG_HOME"
-}
+else
+    rm -f "$HOME/.config/.writetest"
+fi
 
 # Use /workspace if it exists (RunPod, Vast.ai), otherwise fall back to home dir
 if [ -d /workspace ]; then
