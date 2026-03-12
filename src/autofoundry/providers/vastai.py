@@ -26,6 +26,7 @@ class VastAIProvider:
         if not api_key:
             raise ValueError("Vast.ai API key is required")
         self._api_key = api_key
+        self._ssh_key_synced = False
         self._client = httpx.Client(
             base_url=self.BASE_URL,
             headers={
@@ -35,6 +36,32 @@ class VastAIProvider:
             timeout=30.0,
             follow_redirects=True,
         )
+
+    def _ensure_ssh_key(self, public_key: str) -> None:
+        """Register SSH public key in Vast.ai account via API."""
+        if self._ssh_key_synced or not public_key:
+            return
+
+        # Check existing SSH keys
+        resp = self._client.get("/ssh/", params={"api_key": self._api_key})
+        if resp.status_code == 200:
+            existing_keys = resp.json() if isinstance(resp.json(), list) else []
+            for key_entry in existing_keys:
+                if isinstance(key_entry, dict) and public_key.strip() in key_entry.get("public_key", ""):
+                    self._ssh_key_synced = True
+                    return
+
+        # Register new key
+        resp = self._client.put(
+            "/ssh/",
+            json={"ssh_key": public_key.strip()},
+            params={"api_key": self._api_key},
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"Failed to register SSH key with Vast.ai ({resp.status_code}): {resp.text}"
+            )
+        self._ssh_key_synced = True
 
     def validate_key(self) -> bool:
         try:
@@ -140,6 +167,10 @@ class VastAIProvider:
         if not offer_id:
             raise ValueError("Vast.ai requires an offer_id on InstanceConfig")
 
+        # Register SSH key at account level (Vast.ai uses account keys, not per-instance env vars)
+        if config.ssh_public_key:
+            self._ensure_ssh_key(config.ssh_public_key)
+
         payload: dict = {
             "client_id": "me",
             "image": config.image,
@@ -147,11 +178,6 @@ class VastAIProvider:
             "label": config.name,
             "runtype": "ssh",
         }
-        if config.ssh_public_key:
-            payload["env"] = {
-                "-e SSH_PUBLIC_KEY": config.ssh_public_key,
-                "-p 22:22": "",
-            }
 
         resp = self._client.put(
             f"/asks/{offer_id}/",

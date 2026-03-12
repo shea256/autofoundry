@@ -188,23 +188,41 @@ class PrimeIntellectProvider:
         resp.raise_for_status()
         pod = resp.json()
 
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug("PI get_instance raw response: %s", pod)
+
+        raw_status = pod.get("status", "")
         status_map = {
             "running": InstanceStatus.RUNNING,
+            "active": InstanceStatus.RUNNING,
             "stopped": InstanceStatus.STOPPED,
             "pending": InstanceStatus.STARTING,
+            "provisioning": InstanceStatus.STARTING,
+            "starting": InstanceStatus.STARTING,
+            "created": InstanceStatus.STARTING,
+            "failed": InstanceStatus.ERROR,
+            "error": InstanceStatus.ERROR,
         }
-        status = status_map.get(pod.get("status", ""), InstanceStatus.PENDING)
+        status = status_map.get(raw_status.lower(), InstanceStatus.PENDING)
 
+        # Try multiple field names for SSH connection info (PI API may vary)
         ssh = None
-        ssh_conn = pod.get("sshConnection")
+        ssh_conn = (
+            pod.get("sshConnection")
+            or pod.get("ssh_connection")
+            or pod.get("sshTerminal")
+            or pod.get("ssh_terminal")
+            or pod.get("ssh")
+        )
         if isinstance(ssh_conn, dict) and ssh_conn.get("host"):
             ssh = SshConnectionInfo(
                 host=ssh_conn["host"],
                 port=ssh_conn.get("port", 22),
-                username=ssh_conn.get("username", "root"),
+                username=ssh_conn.get("username", "ubuntu"),
             )
         elif isinstance(ssh_conn, str) and ssh_conn:
-            # Parse connection string like "ssh root@host -p 22"
+            # Parse connection string like "ssh ubuntu@host -p 22"
             import re
             host_match = re.search(r"@([\w.\-]+)", ssh_conn)
             port_match = re.search(r"-p\s+(\d+)", ssh_conn)
@@ -213,7 +231,7 @@ class PrimeIntellectProvider:
                 ssh = SshConnectionInfo(
                     host=host_match.group(1),
                     port=int(port_match.group(1)) if port_match else 22,
-                    username=user_match.group(1) if user_match else "root",
+                    username=user_match.group(1) if user_match else "ubuntu",
                 )
 
         return InstanceInfo(

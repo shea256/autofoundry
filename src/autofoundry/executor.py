@@ -43,7 +43,7 @@ def upload_script(
     ssh: SshConnectionInfo,
     local_path: str,
     ssh_key_path: str,
-    remote_path: str = "/workspace/run_experiment.sh",
+    remote_path: str = "/tmp/run_experiment.sh",
 ) -> bool:
     """Upload a script to the remote instance via scp."""
     scp_cmd = [
@@ -137,8 +137,10 @@ def execute_experiment(
 
     unit_label = f"UNIT-{unit_num:02d}"
 
-    # Verify SSH connectivity (key auth can lag behind port availability)
-    for attempt in range(10):
+    # Verify SSH connectivity (SSH daemon can take minutes to start on some providers)
+    max_attempts = 30
+    retry_delay = 10
+    for attempt in range(max_attempts):
         try:
             test = subprocess.run(
                 ["ssh", *_ssh_opts(ssh_key_path),
@@ -155,16 +157,23 @@ def execute_experiment(
             detail = f" ({test.stderr.strip()})"
         elif test is None:
             detail = " (timeout)"
-        if attempt < 9:
+        if attempt < max_attempts - 1:
             console.print(
                 f"  [af.muted]{unit_label} SSH not ready{detail}, "
-                f"retrying ({attempt + 1}/10)...[/af.muted]"
+                f"retrying ({attempt + 1}/{max_attempts})...[/af.muted]"
             )
-            time.sleep(5)
+            time.sleep(retry_delay)
     else:
-        run.error = "SSH key auth failed"
+        last_detail = ""
+        if test and test.stderr:
+            last_detail = test.stderr.strip()
+        if "refused" in last_detail.lower() or test is None:
+            msg = f"{unit_label} SSH never became available — instance may not have started sshd"
+        else:
+            msg = f"{unit_label} SSH auth failed — check key config"
+        run.error = msg
         run.exit_code = -1
-        print_error(f"{unit_label} SSH auth failed — check key config")
+        print_error(msg)
         return run
 
     # Upload script
@@ -187,7 +196,7 @@ def execute_experiment(
     exit_code, lines = run_remote(
         ssh,
         ssh_key_path,
-        "chmod +x /workspace/run_experiment.sh && stdbuf -oL /workspace/run_experiment.sh",
+        "chmod +x /tmp/run_experiment.sh && stdbuf -oL /tmp/run_experiment.sh",
         unit_label,
         on_line=on_line,
     )
