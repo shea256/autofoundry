@@ -144,25 +144,28 @@ class PrimeIntellectProvider:
         """Register SSH public key with PI if not already present."""
         if not ssh_public_key:
             return
-        try:
-            resp = self._client.get("/ssh_keys")
-            if resp.status_code == 200:
-                existing = resp.json().get("data", [])
-                for key in existing:
-                    if key.get("publicKey", "").strip() == ssh_public_key.strip():
-                        return  # Already registered
-            # Register new key
-            import hashlib
-            key_hash = hashlib.sha256(ssh_public_key.encode()).hexdigest()[:8]
-            resp = self._client.post(
-                "/ssh_keys",
-                json={"name": f"autofoundry-{key_hash}", "publicKey": ssh_public_key},
+        # Check existing keys
+        resp = self._client.get("/ssh_keys")
+        if resp.status_code == 200:
+            existing = resp.json().get("data", [])
+            for key in existing:
+                if key.get("publicKey", "").strip() == ssh_public_key.strip():
+                    return  # Already registered
+
+        # Register new key
+        import hashlib
+        key_hash = hashlib.sha256(ssh_public_key.encode()).hexdigest()[:8]
+        resp = self._client.post(
+            "/ssh_keys",
+            json={"name": f"autofoundry-{key_hash}", "publicKey": ssh_public_key},
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"Failed to register SSH key with PRIME Intellect "
+                f"({resp.status_code}): {resp.text}"
             )
-            if resp.status_code == 201:
-                import logging
-                logging.getLogger(__name__).info("Registered SSH key with PRIME Intellect")
-        except Exception:
-            pass  # SSH key registration is best-effort
+        import logging
+        logging.getLogger(__name__).info("Registered SSH key with PRIME Intellect")
 
     def create_instance(self, config: InstanceConfig) -> InstanceInfo:
         # Ensure SSH key is registered before creating instance
