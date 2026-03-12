@@ -81,11 +81,18 @@ def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
     for offer in offers:
         by_provider[offer.provider].append(offer)
 
-    # Display order: providers sorted by their cheapest offer
-    provider_order = sorted(
-        by_provider.keys(),
-        key=lambda p: by_provider[p][0].price_per_hour if by_provider[p] else float("inf"),
-    )
+    # Fixed display order: RunPod, Lambda Labs, Vast.ai, PRIME Intellect
+    _PROVIDER_DISPLAY_ORDER = [
+        ProviderName.RUNPOD,
+        ProviderName.LAMBDALABS,
+        ProviderName.VASTAI,
+        ProviderName.PRIMEINTELLECT,
+    ]
+    provider_order = [p for p in _PROVIDER_DISPLAY_ORDER if p in by_provider]
+    # Append any unknown providers at the end
+    for p in by_provider:
+        if p not in provider_order:
+            provider_order.append(p)
 
     displayed: list[GpuOffer] = []
     global_num = 1
@@ -144,6 +151,82 @@ def recommend_plan(
     # User can adjust in the interactive flow
     cheapest = offers[0]
     return [(cheapest, 1)]
+
+
+def auto_plan(
+    config: Config,
+    gpu_type: str,
+    total_experiments: int,
+    script_path: str,
+    provider_filter: str | None = None,
+    region_filter: str | None = None,
+) -> ProvisioningPlan | None:
+    """Non-interactive planning: auto-select cheapest matching offer."""
+    print_header(TERMS["planning"])
+    console.print()
+    console.print(f"  [af.muted]Querying supply lines for {gpu_type} availability...[/af.muted]")
+
+    offers = query_all_offers(config, gpu_type)
+    if not offers:
+        print_error(f"No {gpu_type} offers found.")
+        return None
+
+    # Filter by provider
+    if provider_filter:
+        pf = provider_filter.lower()
+        offers = [o for o in offers if pf in o.provider.value.lower()]
+        if not offers:
+            print_error(f"No {gpu_type} offers from provider '{provider_filter}'.")
+            return None
+
+    # Filter by region (also check metadata.data_center_id)
+    if region_filter:
+        rf = region_filter.lower()
+
+        def _region_match(o: GpuOffer) -> bool:
+            if o.region and rf in o.region.lower():
+                return True
+            dc = o.metadata.get("data_center_id", "")
+            return bool(dc and rf in dc.lower())
+
+        filtered = [o for o in offers if _region_match(o)]
+        if not filtered:
+            regions = sorted({
+                o.region or o.metadata.get("data_center_id", "?")
+                for o in offers
+            })
+            print_error(
+                f"No {gpu_type} offers matching region '{region_filter}'.\n"
+                f"  Available regions: {', '.join(regions)}"
+            )
+            return None
+        offers = filtered
+
+    # Already sorted by price — pick cheapest
+    cheapest = offers[0]
+    display = PROVIDER_DISPLAY.get(cheapest.provider, cheapest.provider.value)
+    region_label = f" ({cheapest.region})" if cheapest.region else ""
+    console.print(
+        f"  [af.primary]Auto-selected:[/af.primary] "
+        f"{cheapest.gpu_type} on {display}{region_label} "
+        f"@ ${cheapest.price_per_hour:.2f}/hr"
+    )
+
+    plan = ProvisioningPlan(
+        offers=[(cheapest, 1)],
+        total_experiments=total_experiments,
+        script_path=script_path,
+    )
+
+    console.print(
+        f"  [af.primary]DEPLOYMENT PLAN:[/af.primary] "
+        f"1 {TERMS['instance'].lower()}, "
+        f"{total_experiments} {TERMS['experiment'].lower()}, "
+        f"${cheapest.price_per_hour:.2f}/hr"
+    )
+    console.print()
+
+    return plan
 
 
 def interactive_plan(

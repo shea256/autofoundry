@@ -236,6 +236,9 @@ def run(
     num: int = typer.Option(None, "--num", "-n", help="Number of experiment runs"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type (e.g. H100)"),
     volume: str = typer.Option(None, "--volume", "-v", help="Network volume name (creates if needed)"),
+    provider: str = typer.Option(None, "--provider", "-p", help="Provider filter (e.g. primeintellect, vastai)"),
+    region: str = typer.Option(None, "--region", help="Region filter (e.g. US, EU)"),
+    auto: bool = typer.Option(False, "--auto", help="Auto-select cheapest offer, no prompts"),
 ) -> None:
     """Launch autofoundry — GPU experiment orchestration engine."""
     if help_:
@@ -245,6 +248,9 @@ def run(
             ("--num, -n INTEGER", "Number of experiment runs"),
             ("--gpu, -g TEXT", "GPU type (e.g. H100)"),
             ("--volume, -v TEXT", "Network volume name (creates if needed)"),
+            ("--provider, -p TEXT", "Provider filter (e.g. primeintellect, vastai)"),
+            ("--region TEXT", "Region filter (e.g. US, EU)"),
+            ("--auto", "Auto-select cheapest offer, no prompts"),
             ("--help, -h", "Show this help"),
         ])
         raise typer.Exit()
@@ -371,13 +377,21 @@ def run(
         return
 
     # New session
-    script_path, num_experiments, gpu_type = _prompt_session_params(config, script)
-
-    # Override with CLI flags if provided
-    if num is not None:
-        num_experiments = num
-    if gpu is not None:
-        gpu_type = gpu
+    if auto:
+        # Non-interactive: require script argument, use defaults for rest
+        if not script:
+            print_error("--auto requires a script argument")
+            raise typer.Exit(1)
+        script_path = _resolve_script(script, config)
+        num_experiments = num if num is not None else 1
+        gpu_type = gpu if gpu is not None else config.default_gpu_type
+    else:
+        script_path, num_experiments, gpu_type = _prompt_session_params(config, script)
+        # Override with CLI flags if provided
+        if num is not None:
+            num_experiments = num
+        if gpu is not None:
+            gpu_type = gpu
 
     # Remember script for next time
     config.last_script = script_path
@@ -401,9 +415,15 @@ def run(
     _show_session_summary(session)
 
     # Planning — select providers/offers
-    from autofoundry.planner import interactive_plan
-
-    plan = interactive_plan(config, gpu_type, num_experiments, script_path)
+    if auto:
+        from autofoundry.planner import auto_plan
+        plan = auto_plan(
+            config, gpu_type, num_experiments, script_path,
+            provider_filter=provider, region_filter=region,
+        )
+    else:
+        from autofoundry.planner import interactive_plan
+        plan = interactive_plan(config, gpu_type, num_experiments, script_path)
     if plan is None:
         store.update_session_status(SessionStatus.FAILED)
         store.close()
@@ -427,11 +447,41 @@ def run(
         teardown_instances,
     )
 
-    instances = provision_instances(
-        config, plan, session_id, store,
-        gpu_type_filter=gpu_type,
-        volume_id=volume_id,
-    )
+    try:
+        instances = provision_instances(
+            config, plan, session_id, store,
+            gpu_type_filter=gpu_type,
+            volume_id=volume_id,
+        )
+    except KeyboardInterrupt:
+        console.print()
+        stored = store.get_instances()
+        if stored:
+            console.print(
+                "  [af.alert]INTERRUPT — "
+                f"{len(stored)} instance(s) already created[/af.alert]"
+            )
+            choice = Prompt.ask(
+                "\n  [af.muted]What to do with instances?\n"
+                "  terminate = delete everything\n"
+                "  keep = leave running[/af.muted]\n"
+                "  [af.label]Choice[/af.label]",
+                choices=["terminate", "keep"],
+                default="terminate",
+            )
+            if choice == "terminate":
+                teardown_instances(config, stored)
+                store.update_session_status(SessionStatus.FAILED)
+            else:
+                console.print(
+                    f"  [af.muted]Instances kept. Use 'autofoundry teardown' to clean up.[/af.muted]"
+                )
+                store.update_session_status(SessionStatus.PAUSED)
+        else:
+            store.update_session_status(SessionStatus.FAILED)
+        store.close()
+        raise typer.Exit(1)
+
     if not instances:
         print_error("No instances came online. Aborting.")
         store.update_session_status(SessionStatus.FAILED)
@@ -477,15 +527,19 @@ def run(
     from autofoundry.provisioner import stop_instances
 
     console.print()
-    action = Prompt.ask(
-        f"  [af.label]What to do with {TERMS['instances'].lower()}?[/af.label]\n"
-        "  [af.muted]  stop = release GPU, keep disk (fast restart later)\n"
-        "  terminate = delete everything\n"
-        "  keep = leave running[/af.muted]\n"
-        "  [af.label]Choice[/af.label]",
-        choices=["stop", "terminate", "keep"],
-        default="stop",
-    )
+    if auto:
+        action = "terminate"
+        console.print("  [af.muted]Auto mode: terminating instances...[/af.muted]")
+    else:
+        action = Prompt.ask(
+            f"  [af.label]What to do with {TERMS['instances'].lower()}?[/af.label]\n"
+            "  [af.muted]  stop = release GPU, keep disk (fast restart later)\n"
+            "  terminate = delete everything\n"
+            "  keep = leave running[/af.muted]\n"
+            "  [af.label]Choice[/af.label]",
+            choices=["stop", "terminate", "keep"],
+            default="stop",
+        )
 
     if action == "stop":
         stop_instances(config, instances)

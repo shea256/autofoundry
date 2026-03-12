@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -52,19 +53,38 @@ def _provision_one(
     config: InstanceConfig,
     unit_num: int,
     gpu_type: str | None = None,
+    shared_claimed: set[str] | None = None,
+    claimed_lock: threading.Lock | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> InstanceInfo:
     """Create a single instance and wait for it to be ready.
 
     If the initial offer is taken, queries fresh offers and retries
     with the next cheapest available (up to MAX_OFFER_RETRIES attempts).
+
+    Args:
+        shared_claimed: Offer IDs already claimed by other threads (avoids retry storms).
+        claimed_lock: Lock protecting shared_claimed.
+        cancel_event: Set by main thread on Ctrl+C to signal workers to stop.
     """
     display = provider.name
     label = f"UNIT-{unit_num:02d}"
-    tried_offers: set[str] = set()
     current_config = config
 
+    def _claim_offer(offer_id: str) -> None:
+        if shared_claimed is not None and claimed_lock is not None:
+            with claimed_lock:
+                shared_claimed.add(offer_id)
+
+    def _is_claimed(offer_id: str) -> bool:
+        if shared_claimed is not None and claimed_lock is not None:
+            with claimed_lock:
+                return offer_id in shared_claimed
+        return False
+
+    _claim_offer(current_config.offer_id)
+
     for attempt in range(MAX_OFFER_RETRIES):
-        tried_offers.add(current_config.offer_id)
         console.print(
             f"  [af.muted]{label} [{display}] creating "
             f"({current_config.gpu_type} {current_config.offer_id[:12]})...[/af.muted]"
@@ -89,20 +109,20 @@ def _provision_one(
                 f"finding next available...[/af.muted]"
             )
 
-            # Query fresh offers and pick the cheapest untried one
+            # Query fresh offers and pick the cheapest one not claimed by any thread
             fresh_offers = provider.list_gpu_offers(gpu_type)
             fresh_offers.sort(key=lambda o: o.price_per_hour)
 
             next_offer = None
             for offer in fresh_offers:
-                if offer.offer_id not in tried_offers and offer.availability > 0:
+                if not _is_claimed(offer.offer_id) and offer.availability > 0:
                     next_offer = offer
+                    _claim_offer(offer.offer_id)
                     break
 
             if next_offer is None:
                 raise RuntimeError(
-                    f"No more {gpu_type or 'GPU'} offers available on {display} "
-                    f"(tried {len(tried_offers)})"
+                    f"No more {gpu_type or 'GPU'} offers available on {display}"
                 )
 
             current_config = current_config.model_copy(
@@ -111,14 +131,65 @@ def _provision_one(
     else:
         raise RuntimeError(f"Failed to provision {label} after {MAX_OFFER_RETRIES} attempts")
 
-    # Instance created — wait for SSH. If wait fails, attach the instance ID
-    # to the error so the caller can still track it for cleanup.
+    # Instance created — poll for SSH readiness with status updates
     console.print(
         f"  [af.secondary]{label} [{display}] "
         f"instance {info.instance_id} — waiting for SSH...[/af.secondary]"
     )
+    import time as _time
+
+    timeout = 900
+    start = _time.time()
+    deadline = start + timeout
+    delay = 5.0
+    last_status = ""
+    poll_count = 0
     try:
-        info = provider.wait_until_ready(info.instance_id, timeout=900)
+        while _time.time() < deadline:
+            if cancel_event and cancel_event.is_set():
+                raise ProvisioningError(
+                    f"{label} cancelled", partial_instance=info
+                )
+            info = provider.get_instance(info.instance_id)
+            status_str = info.status.value if info.status else "unknown"
+            poll_count += 1
+            elapsed = int(_time.time() - start)
+            ssh_indicator = f", ssh={'yes' if info.ssh else 'no'}"
+            if status_str != last_status:
+                console.print(
+                    f"  [af.muted]{label} [{display}] status: {status_str}{ssh_indicator}[/af.muted]"
+                )
+                last_status = status_str
+            elif poll_count % 6 == 0:
+                # Heartbeat every ~6 polls so the user knows we're still waiting
+                console.print(
+                    f"  [af.muted]{label} [{display}] still {status_str}{ssh_indicator} ({elapsed}s)[/af.muted]"
+                )
+            if info.status == InstanceStatus.RUNNING and info.ssh:
+                break
+            if info.status == InstanceStatus.ERROR:
+                raise ProvisioningError(
+                    f"{label} instance failed (status: {status_str})",
+                    partial_instance=info,
+                )
+            # Use cancel_event.wait() instead of time.sleep() so cancellation
+            # is noticed immediately rather than after the sleep finishes
+            sleep_dur = min(delay, max(0, deadline - _time.time()))
+            if cancel_event:
+                cancel_event.wait(timeout=sleep_dur)
+            else:
+                _time.sleep(sleep_dur)
+            delay = min(delay * 1.5, 30.0)
+        else:
+            raise TimeoutError(
+                f"Instance {info.instance_id} not ready within {timeout}s "
+                f"(last status: {last_status})"
+            )
+    except TimeoutError:
+        raise ProvisioningError(
+            f"Timed out waiting for {label} (status: {last_status})",
+            partial_instance=info,
+        )
     except Exception as e:
         raise ProvisioningError(str(e), partial_instance=info) from e
 
@@ -150,26 +221,57 @@ def provision_instances(
     # Build list of (provider, instance_config, unit_number, gpu_type) tasks
     tasks: list[tuple[CloudProvider, InstanceConfig, int, str]] = []
     unit_num = 1
+    ssh_pub_key = _read_ssh_public_key(config.ssh_key_path)
+
+    # Shared set of claimed offer IDs so parallel threads don't fight over the same offers
+    shared_claimed: set[str] = set()
+    claimed_lock = threading.Lock()
+    cancel_event = threading.Event()
 
     for offer, count in plan.offers:
         provider = get_provider(offer.provider, config.api_keys[offer.provider])
-        for _ in range(count):
-            image = PROVIDER_IMAGES.get(
-                offer.provider,
-                "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel",
-            )
+        image = PROVIDER_IMAGES.get(
+            offer.provider,
+            "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel",
+        )
+        retry_gpu = gpu_type_filter or offer.gpu_type
+
+        # When requesting multiple units, pre-fetch distinct offers so each
+        # unit gets its own machine instead of all competing for one offer.
+        if count > 1:
+            all_offers = provider.list_gpu_offers(retry_gpu)
+            all_offers.sort(key=lambda o: o.price_per_hour)
+            # Start with the selected offer, then fill with the cheapest alternatives
+            distinct_offers = [offer]
+            seen_ids = {offer.offer_id}
+            for o in all_offers:
+                if o.offer_id not in seen_ids and o.availability > 0:
+                    distinct_offers.append(o)
+                    seen_ids.add(o.offer_id)
+                if len(distinct_offers) >= count:
+                    break
+            if len(distinct_offers) < count:
+                console.print(
+                    f"  [af.alert]Only {len(distinct_offers)} distinct {retry_gpu} "
+                    f"offers available (requested {count})[/af.alert]"
+                )
+        else:
+            distinct_offers = [offer]
+
+        for i in range(min(count, len(distinct_offers))):
+            selected = distinct_offers[i]
             instance_config = InstanceConfig(
                 name=f"af-{session_id}-unit{unit_num:02d}",
-                gpu_type=offer.gpu_type,
-                gpu_count=offer.gpu_count,
+                gpu_type=selected.gpu_type,
+                gpu_count=selected.gpu_count,
                 image=image,
                 disk_gb=50,
-                ssh_public_key=_read_ssh_public_key(config.ssh_key_path),
-                offer_id=offer.offer_id,
+                ssh_public_key=ssh_pub_key,
+                offer_id=selected.offer_id,
                 volume_id=volume_id,
-                metadata=offer.metadata,
+                metadata=selected.metadata,
             )
-            retry_gpu = gpu_type_filter or offer.gpu_type
+            shared_claimed.add(selected.offer_id)
             tasks.append((provider, instance_config, unit_num, retry_gpu))
             unit_num += 1
 
@@ -184,31 +286,52 @@ def provision_instances(
 
     with ThreadPoolExecutor(max_workers=min(total, 4)) as pool:
         futures = {
-            pool.submit(_provision_one, provider, ic, num, gpu): num
+            pool.submit(
+                _provision_one, provider, ic, num, gpu,
+                shared_claimed, claimed_lock, cancel_event,
+            ): num
             for provider, ic, num, gpu in tasks
         }
-        for future in as_completed(futures):
-            num = futures[future]
-            try:
-                info = future.result()
-                info = info.model_copy(
-                    update={"created_at": datetime.now()}
-                )
-                instances.append(info)
-                store.add_instance(info)
-            except ProvisioningError as e:
-                failed += 1
-                print_error(f"UNIT-{num:02d} failed: {e}")
-                # Track partially-created instances so they get cleaned up
-                if e.partial_instance:
-                    partial = e.partial_instance.model_copy(
+        try:
+            for future in as_completed(futures):
+                num = futures[future]
+                try:
+                    info = future.result()
+                    info = info.model_copy(
                         update={"created_at": datetime.now()}
                     )
-                    instances.append(partial)
-                    store.add_instance(partial)
-            except Exception as e:
-                failed += 1
-                print_error(f"UNIT-{num:02d} failed: {e}")
+                    instances.append(info)
+                    store.add_instance(info)
+                except ProvisioningError as e:
+                    failed += 1
+                    if not cancel_event.is_set():
+                        print_error(f"UNIT-{num:02d} failed: {e}")
+                    # Track partially-created instances so they get cleaned up
+                    if e.partial_instance:
+                        partial = e.partial_instance.model_copy(
+                            update={"created_at": datetime.now()}
+                        )
+                        instances.append(partial)
+                        store.add_instance(partial)
+                except Exception as e:
+                    failed += 1
+                    if not cancel_event.is_set():
+                        print_error(f"UNIT-{num:02d} failed: {e}")
+        except KeyboardInterrupt:
+            # Signal all worker threads to stop, then wait for them to finish
+            cancel_event.set()
+            for f in futures:
+                f.cancel()
+            # Drain remaining futures so partial instances get tracked
+            for future in futures:
+                try:
+                    future.result()
+                except ProvisioningError as e:
+                    if e.partial_instance:
+                        store.add_instance(e.partial_instance)
+                except Exception:
+                    pass
+            raise
 
     console.print()
     if instances:
