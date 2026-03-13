@@ -43,7 +43,7 @@ class VastAIProvider:
             return
 
         # Check existing SSH keys
-        resp = self._client.get("/ssh/", params={"api_key": self._api_key})
+        resp = self._client.get("/ssh/")
         if resp.status_code == 200:
             existing_keys = resp.json() if isinstance(resp.json(), list) else []
             for key_entry in existing_keys:
@@ -52,10 +52,9 @@ class VastAIProvider:
                     return
 
         # Register new key
-        resp = self._client.put(
+        resp = self._client.post(
             "/ssh/",
             json={"ssh_key": public_key.strip()},
-            params={"api_key": self._api_key},
         )
         if resp.status_code >= 300:
             raise RuntimeError(
@@ -182,6 +181,7 @@ class VastAIProvider:
         resp = self._client.put(
             f"/asks/{offer_id}/",
             json=payload,
+            params={"api_key": self._api_key},
         )
         if resp.status_code >= 300:
             raise httpx.HTTPStatusError(
@@ -220,10 +220,10 @@ class VastAIProvider:
         )
 
         ssh = None
-        public_ip = instance.get("public_ipaddr")
+        ssh_host = instance.get("ssh_host")
         ssh_port = instance.get("ssh_port")
-        if public_ip and ssh_port:
-            ssh = SshConnectionInfo(host=public_ip, port=ssh_port, username="root")
+        if ssh_host and ssh_port:
+            ssh = SshConnectionInfo(host=ssh_host, port=int(ssh_port), username="root")
 
         return InstanceInfo(
             provider=ProviderName.VASTAI,
