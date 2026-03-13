@@ -130,27 +130,91 @@ class PrimeIntellectProvider:
                     "socket": str(item.get("socket") or ""),
                     "security": str(item.get("security") or "secure_cloud"),
                     "data_center_id": str(item.get("dataCenter") or ""),
+                    "vcpu_default": str((item.get("vcpu") or {}).get("defaultCount") or ""),
+                    "memory_default": str((item.get("memory") or {}).get("defaultCount") or ""),
+                    "disk_default": str((item.get("disk") or {}).get("defaultCount") or ""),
+                    "country": str(item.get("country") or ""),
+                    "is_spot": str(item.get("isSpot") or "false"),
+                    "images": ",".join(item.get("images") or []),
                 },
             ))
         return offers
 
+    def _ensure_ssh_key(self, ssh_public_key: str) -> None:
+        """Register SSH public key with PI if not already present."""
+        if not ssh_public_key:
+            return
+        # Check existing keys
+        resp = self._client.get("/ssh_keys")
+        if resp.status_code == 200:
+            existing = resp.json().get("data", [])
+            for key in existing:
+                if key.get("publicKey", "").strip() == ssh_public_key.strip():
+                    return  # Already registered
+
+        # Register new key
+        import hashlib
+        key_hash = hashlib.sha256(ssh_public_key.encode()).hexdigest()[:8]
+        resp = self._client.post(
+            "/ssh_keys",
+            json={"name": f"autofoundry-{key_hash}", "publicKey": ssh_public_key},
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"Failed to register SSH key with PRIME Intellect "
+                f"({resp.status_code}): {resp.text}"
+            )
+        import logging
+        logging.getLogger(__name__).info("Registered SSH key with PRIME Intellect")
+
     def create_instance(self, config: InstanceConfig) -> InstanceInfo:
+        # Ensure SSH key is registered before creating instance
+        self._ensure_ssh_key(config.ssh_public_key)
+
         # PI requires nested {pod: {...}, provider: {...}} format
-        # with camelCase fields and cloudId from availability response
         meta = config.metadata
+        # vcpus and memory are required by the PI API (lowercase field names)
+        vcpu = int(meta.get("vcpu_default") or 0)
+        memory = int(meta.get("memory_default") or 0)
+        disk = config.disk_gb or int(meta.get("disk_default") or 200)
+
+        # Select an image that is supported by this offer's provider
+        available_images = [i for i in meta.get("images", "").split(",") if i]
+        # Prefer PyTorch images, then CUDA images, then fall back to ubuntu
+        IMAGE_PRIORITY = [
+            "cuda_12_4_pytorch_2_4", "cuda_12_4_pytorch_2_5",
+            "cuda_12_4_pytorch_2_6", "cuda_12_6_pytorch_2_7",
+            "cuda_12_1_pytorch_2_4", "cuda_12_1_pytorch_2_3",
+            "cuda_12_1_pytorch_2_2", "ubuntu_22_cuda_12",
+        ]
+        image = "ubuntu_22_cuda_12"  # default fallback
+        if available_images:
+            for preferred in IMAGE_PRIORITY:
+                if preferred in available_images:
+                    image = preferred
+                    break
+            else:
+                image = available_images[0]
+
         payload: dict = {
             "pod": {
                 "name": config.name,
                 "cloudId": config.offer_id,
                 "gpuType": config.gpu_type,
                 "gpuCount": config.gpu_count,
-                "image": "ubuntu_22_cuda_12",
+                "image": image,
                 "security": meta.get("security", "secure_cloud"),
+                "disk_size": disk,
             },
             "provider": {
                 "type": meta.get("provider_type", ""),
             },
         }
+        if vcpu:
+            payload["pod"]["vcpus"] = vcpu
+        if memory:
+            payload["pod"]["memory"] = memory
+
         data_center = meta.get("data_center_id")
         if not data_center:
             raise ValueError(
@@ -161,10 +225,8 @@ class PrimeIntellectProvider:
 
         if meta.get("socket"):
             payload["pod"]["socket"] = meta["socket"]
-        if config.disk_gb:
-            payload["pod"]["diskSize"] = config.disk_gb
 
-        resp = self._client.post("/pods/", json=payload)
+        resp = self._client.post("/pods/", json=payload, timeout=120.0)
         if resp.status_code >= 300:
             raise httpx.HTTPStatusError(
                 f"PI create_instance failed: {resp.status_code} {resp.text}",
@@ -203,10 +265,12 @@ class PrimeIntellectProvider:
             "created": InstanceStatus.STARTING,
             "failed": InstanceStatus.ERROR,
             "error": InstanceStatus.ERROR,
+            "terminated": InstanceStatus.DELETED,
         }
         status = status_map.get(raw_status.lower(), InstanceStatus.PENDING)
 
-        # Try multiple field names for SSH connection info (PI API may vary)
+        # Parse SSH connection info — PI returns sshConnection as a string
+        # like "ssh user@host -p port" or as a dict, or ip as a plain string
         ssh = None
         ssh_conn = (
             pod.get("sshConnection")
@@ -215,14 +279,14 @@ class PrimeIntellectProvider:
             or pod.get("ssh_terminal")
             or pod.get("ssh")
         )
+
         if isinstance(ssh_conn, dict) and ssh_conn.get("host"):
             ssh = SshConnectionInfo(
                 host=ssh_conn["host"],
                 port=ssh_conn.get("port", 22),
-                username=ssh_conn.get("username", "ubuntu"),
+                username=ssh_conn.get("username", "root"),
             )
         elif isinstance(ssh_conn, str) and ssh_conn:
-            # Parse connection string like "ssh ubuntu@host -p 22"
             import re
             host_match = re.search(r"@([\w.\-]+)", ssh_conn)
             port_match = re.search(r"-p\s+(\d+)", ssh_conn)
@@ -231,16 +295,24 @@ class PrimeIntellectProvider:
                 ssh = SshConnectionInfo(
                     host=host_match.group(1),
                     port=int(port_match.group(1)) if port_match else 22,
-                    username=user_match.group(1) if user_match else "ubuntu",
+                    username=user_match.group(1) if user_match else "root",
                 )
+
+        # Fallback: if sshConnection is null but ip is available, use ip directly
+        if ssh is None and pod.get("ip"):
+            ssh = SshConnectionInfo(
+                host=pod["ip"],
+                port=22,
+                username="root",
+            )
 
         return InstanceInfo(
             provider=ProviderName.PRIMEINTELLECT,
             instance_id=instance_id,
             name=pod.get("name", ""),
             status=status,
-            gpu_type=pod.get("gpu_type", ""),
-            gpu_count=pod.get("gpu_count", 1),
+            gpu_type=pod.get("gpuName", pod.get("gpu_type", "")),
+            gpu_count=pod.get("gpuCount", pod.get("gpu_count", 1)),
             price_per_hour=pod.get("priceHr", 0.0),
             ssh=ssh,
         )
