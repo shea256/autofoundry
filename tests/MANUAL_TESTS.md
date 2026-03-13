@@ -47,25 +47,49 @@ autofoundry reserves --gpu A100
 autofoundry volumes
 ```
 
-**Pass:** Shows existing RunPod network volumes (or "No volumes found" if none exist).
+**Pass:** Shows existing volumes from RunPod and Lambda Labs (or "No volumes found" if none exist).
 
 ---
 
-## 5. Scratch run (no volume, no Docker image)
-
-This is the simplest path — everything installs from zero.
+## 5. Scratch run — RunPod
 
 ```bash
-autofoundry run scripts/run_autoresearch.sh
+autofoundry run scripts/run_autoresearch.sh --provider runpod --auto
 ```
 
-Walk through the prompts:
-- Experiments: 1
-- GPU type: H100
-- Select a RunPod offer
-- Confirm the plan
+Or walk through interactively and select a RunPod offer.
 
 **Pass:** Instance provisions, script uploads, autoresearch clones + installs + runs, metrics reported, teardown prompt works.
+
+---
+
+## 5b. Scratch run — Lambda Labs
+
+```bash
+autofoundry run scripts/run_autoresearch.sh --provider lambdalabs --region US --auto
+```
+
+**Pass:** Bare metal VM provisions (no Docker), SSH key registered, script runs, metrics reported, teardown works.
+
+---
+
+## 5c. Scratch run — Vast.ai
+
+```bash
+autofoundry run scripts/run_autoresearch.sh --provider vastai --auto
+```
+
+**Pass:** Instance provisions via marketplace PUT, SSH connects using `ssh_host`/`ssh_port` fields, script runs, metrics reported, teardown works.
+
+---
+
+## 5d. Scratch run — PRIME Intellect
+
+```bash
+autofoundry run scripts/run_autoresearch.sh --provider primeintellect --auto
+```
+
+**Pass:** SSH key registered and set as primary, instance provisions (massedcompute sub-provider excluded), script runs, metrics reported, teardown works.
 
 ---
 
@@ -153,15 +177,30 @@ autofoundry run scripts/run_autoresearch.sh --volume af-workspace
 autofoundry run scripts/run_autoresearch.sh --volume my-vol
 ```
 
-Select PRIME Intellect instead of RunPod.
+Select PRIME Intellect or Vast.ai instead of RunPod/Lambda Labs.
 
 **Pass:** Shows error "Network volumes not supported on: primeintellect", continues without volume.
 
 ---
 
+## 11. Quick provider scripts
+
+Each provider has a build-and-run script for one-command end-to-end testing:
+
+```bash
+scripts/build_and_run_autoresearch_on_runpod.sh
+scripts/build_and_run_autoresearch_on_lambdalabs.sh
+scripts/build_and_run_autoresearch_on_vastai.sh
+scripts/build_and_run_autoresearch_on_primeintellect.sh
+```
+
+**Pass:** Each script builds autofoundry from source and runs autoresearch on the target provider end-to-end.
+
+---
+
 ## Cleanup
 
-Delete any test volumes via the RunPod dashboard (no CLI delete command yet).
+Delete any test volumes via the RunPod or Lambda Labs dashboard (no CLI delete command yet).
 Teardown any remaining operations:
 
 ```bash
