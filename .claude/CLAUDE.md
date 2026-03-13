@@ -76,6 +76,6 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 
 ## Status
 - RunPod: fully working (provision, execute, stream, report, teardown, volumes) ✓
-- Lambda Labs: GPU listing works, provisioning + volumes untested
+- Lambda Labs: fully working (provision, execute, stream, report, teardown) ✓
 - Vast.ai: GPU listing works, provisioning untested
 - PRIME Intellect: GPU listing works (inventory fluctuates), provisioning untested
