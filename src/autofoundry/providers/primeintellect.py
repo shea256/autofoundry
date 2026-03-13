@@ -32,6 +32,7 @@ class PrimeIntellectProvider:
                 "Content-Type": "application/json",
             },
             timeout=30.0,
+            follow_redirects=True,
         )
 
     def validate_key(self) -> bool:
@@ -138,38 +139,71 @@ class PrimeIntellectProvider:
                     "images": ",".join(item.get("images") or []),
                 },
             ))
+
+        # Filter out sub-providers with known SSH key propagation and
+        # provisioning reliability issues
+        _BLOCKED_PROVIDERS = {"massedcompute"}
+        offers = [
+            o for o in offers
+            if o.metadata.get("provider_type", "") not in _BLOCKED_PROVIDERS
+        ]
+
         return offers
 
-    def _ensure_ssh_key(self, ssh_public_key: str) -> None:
-        """Register SSH public key with PI if not already present."""
+    def _ensure_ssh_key(self, ssh_public_key: str) -> str:
+        """Register SSH public key with PI and set as primary.
+
+        PI only propagates the primary SSH key to sub-providers.
+        Returns the key ID.
+        """
         if not ssh_public_key:
-            return
-        # Check existing keys
-        resp = self._client.get("/ssh_keys")
+            return ""
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Check existing keys (PI API requires trailing slash)
+        resp = self._client.get("/ssh_keys/")
+        key_id = ""
         if resp.status_code == 200:
             existing = resp.json().get("data", [])
             for key in existing:
                 if key.get("publicKey", "").strip() == ssh_public_key.strip():
-                    return  # Already registered
+                    key_id = key.get("id", "")
+                    if key.get("isPrimary"):
+                        return key_id  # Already registered and primary
+                    break
 
-        # Register new key
-        import hashlib
-        key_hash = hashlib.sha256(ssh_public_key.encode()).hexdigest()[:8]
-        resp = self._client.post(
-            "/ssh_keys",
-            json={"name": f"autofoundry-{key_hash}", "publicKey": ssh_public_key},
-        )
-        if resp.status_code >= 300:
-            raise RuntimeError(
-                f"Failed to register SSH key with PRIME Intellect "
-                f"({resp.status_code}): {resp.text}"
+        # Register new key if not found
+        if not key_id:
+            import hashlib
+            key_hash = hashlib.sha256(ssh_public_key.encode()).hexdigest()[:8]
+            resp = self._client.post(
+                "/ssh_keys/",
+                json={"name": f"autofoundry-{key_hash}", "publicKey": ssh_public_key},
             )
-        import logging
-        logging.getLogger(__name__).info("Registered SSH key with PRIME Intellect")
+            if resp.status_code >= 300:
+                raise RuntimeError(
+                    f"Failed to register SSH key with PRIME Intellect "
+                    f"({resp.status_code}): {resp.text}"
+                )
+            key_id = resp.json().get("id", "")
+            logger.info("Registered SSH key with PRIME Intellect")
+
+        # Set as primary so sub-providers propagate it
+        if key_id:
+            resp = self._client.patch(
+                f"/ssh_keys/{key_id}/",
+                json={"isPrimary": True},
+            )
+            if resp.status_code < 300:
+                logger.info("Set SSH key as primary on PRIME Intellect")
+
+        return key_id
 
     def create_instance(self, config: InstanceConfig) -> InstanceInfo:
         # Ensure SSH key is registered before creating instance
-        self._ensure_ssh_key(config.ssh_public_key)
+        ssh_key_id = self._ensure_ssh_key(config.ssh_public_key)
 
         # PI requires nested {pod: {...}, provider: {...}} format
         meta = config.metadata

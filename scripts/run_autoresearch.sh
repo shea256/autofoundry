@@ -14,10 +14,10 @@ else
 fi
 
 # Ensure python3-dev is installed (needed for Triton/torch.compile on bare images)
-if ! python3 -c "import sysconfig; assert sysconfig.get_path('include')" 2>/dev/null || \
-   [ ! -f "$(python3 -c 'import sysconfig; print(sysconfig.get_path("include"))')/Python.h" ]; then
-    apt-get update -qq && apt-get install -y -qq python3-dev >/dev/null 2>&1 || true
-fi
+# Always install — idempotent, fast if already present, avoids false-positive checks
+echo "Ensuring python3-dev is installed..."
+apt-get update -qq 2>/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-dev 2>/dev/null || true
 
 # Use /workspace if it exists (RunPod, Vast.ai), otherwise fall back to home dir
 if [ -d /workspace ]; then
