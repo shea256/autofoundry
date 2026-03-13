@@ -38,12 +38,19 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 
 ### Vast.ai
 - Response uses `"bundles"` key (not `"offers"`)
-- Uses `api_key` as query param
+- Auth: `Authorization: Bearer` header on httpx client for most endpoints
+- `create_instance` PUT passes `api_key` as query param (not header)
 - GPU name filtering must be client-side (substring match via `_find_gpu_variants`), not exact match
+- **SSH connectivity**: Use `ssh_host` and `ssh_port` fields from instance details (not `public_ipaddr`)
+- SSH key registration: POST to `/ssh/` (not PUT), no `api_key` query param needed (uses Bearer header)
 - Provider image: `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`
 
 ### PRIME Intellect
 - API returns camelCase fields: `gpuType`, `gpuMemory`, `cloudId`, `prices.onDemand`
+- httpx client requires `follow_redirects=True` (API returns 307 for paths without trailing slashes)
+- SSH key endpoints require trailing slashes: `/ssh_keys/`, `/ssh_keys/{id}/`
+- SSH key must be set as primary (`isPrimary: true` via PATCH) — PI only propagates primary key to sub-providers
+- `massedcompute` sub-provider is filtered out (unreliable SSH key propagation and provisioning)
 - `create_instance` requires nested `{"pod": {...}, "provider": {...}}` payload
 - `stockStatus` values: "Low" counts as available; only exclude "", "out_of_stock", "unavailable"
 - Null safety: use `str(item.get("field") or "")` for metadata dict values (Pydantic rejects None in `dict[str, str]`)
@@ -77,5 +84,5 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 ## Status
 - RunPod: fully working (provision, execute, stream, report, teardown, volumes) ✓
 - Lambda Labs: fully working (provision, execute, stream, report, teardown) ✓
-- Vast.ai: GPU listing works, provisioning untested
+- Vast.ai: fully working (provision, execute, stream, report, teardown) ✓
 - PRIME Intellect: fully working (provision, execute, stream, report, teardown) ✓
