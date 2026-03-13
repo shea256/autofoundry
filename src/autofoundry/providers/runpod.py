@@ -116,7 +116,7 @@ class RunPodProvider:
         resp = httpx.post(
             self.GRAPHQL_URL,
             json={"query": query},
-            headers={"api_key": self._api_key},
+            headers={"Authorization": f"Bearer {self._api_key}"},
             timeout=30.0,
         )
         resp.raise_for_status()

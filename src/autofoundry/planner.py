@@ -180,11 +180,21 @@ def auto_plan(
             return None
 
     # Filter by region (also check metadata.data_center_id)
+    # Some providers (e.g. RunPod) don't expose geographic region in offers —
+    # their "region" field is a cloud type like SECURE/COMMUNITY.  These offers
+    # always pass the geographic region filter; the datacenter is selected at
+    # pod creation time.
     if region_filter:
         rf = region_filter.lower()
+        _NON_GEOGRAPHIC_REGIONS = {"secure", "community"}
 
         def _region_match(o: GpuOffer) -> bool:
-            if o.region and rf in o.region.lower():
+            # Offers without geographic regions always pass
+            if o.region and o.region.lower() in _NON_GEOGRAPHIC_REGIONS:
+                return True
+            if not o.region:
+                return True
+            if rf in o.region.lower():
                 return True
             dc = o.metadata.get("data_center_id", "")
             return bool(dc and rf in dc.lower())

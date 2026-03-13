@@ -100,6 +100,7 @@ def _provision_one(
                 "no_such_ask", "not found", "no longer available",
                 "unavailable", "already rented", "insufficient capacity",
                 "try again later", "out of stock", "503",
+                "no instances", "currently available",
             ))
 
             if not retryable or attempt >= MAX_OFFER_RETRIES - 1:
