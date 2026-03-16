@@ -101,29 +101,34 @@ autofoundry run scripts/run_autoresearch.sh --resume <session-id>
 ## CLI Reference
 
 ```
-autofoundry run <script> [OPTIONS]
+autofoundry run [SCRIPT] [OPTIONS]
 
 Arguments:
-  script              Path to experiment shell script
+  script              Path to experiment shell script (prompted if omitted)
 
 Options:
   --num, -n           Number of experiment runs (default: 1)
   --gpu, -g           GPU type to search for (default: H100)
+  --provider, -p      Provider filter (e.g. runpod, vastai, primeintellect, lambdalabs)
+  --region            Region filter (e.g. US, EU)
   --resume, -r        Resume a previous session
   --volume, -v        Network volume name (RunPod, Lambda Labs)
+  --auto              Auto-select cheapest offer, no prompts
 
-autofoundry config          Configure provider API keys
-autofoundry inventory       Browse GPU inventory
-autofoundry volumes         List network volumes
-autofoundry status [OP_ID]  Show operation status
-autofoundry results OP_ID   Show experiment metrics
-autofoundry teardown OP_ID  Terminate instances
+autofoundry config                          Configure provider API keys
+autofoundry inventory [-g GPU]              Browse GPU inventory
+autofoundry volumes list                    List network volumes
+autofoundry volumes create [--name] [--provider] [--size] [--region]
+                                            Create a new network volume
+autofoundry status [OP_ID]                  Show operation status
+autofoundry results [OP_ID]                 Show experiment metrics
+autofoundry teardown OP_ID                  Terminate instances
 ```
 
 ## Architecture
 
 ```
-cli.py           Entry point — run, config, reserves, volumes, status, results, teardown
+cli.py           Entry point — run, config, inventory, volumes, status, results, teardown
 planner.py       GPU offer querying and selection
 provisioner.py   Instance lifecycle management
 executor.py      SSH-based script upload and execution
