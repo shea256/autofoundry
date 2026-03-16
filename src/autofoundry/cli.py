@@ -6,6 +6,7 @@ from pathlib import Path
 
 import click
 import typer
+from dotenv import load_dotenv
 from rich.prompt import IntPrompt, Prompt
 
 from autofoundry import __version__
@@ -23,6 +24,7 @@ from autofoundry.theme import (
     print_success,
 )
 
+load_dotenv()  # load .env into os.environ (e.g. HF_TOKEN for authenticated HF Hub requests)
 
 app = typer.Typer(
     add_completion=False,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import threading
@@ -63,6 +64,19 @@ def upload_script(
     return result.returncode == 0
 
 
+def _remote_env_prefix() -> str:
+    """Build env var prefix for remote commands.
+
+    Always sets PYTHONUNBUFFERED=1. Forwards HF_TOKEN if available locally
+    so HuggingFace Hub requests are authenticated (faster downloads, higher rate limits).
+    """
+    env_vars = ["PYTHONUNBUFFERED=1"]
+    hf_token = os.environ.get("HUGGINGFACE_TOKEN")
+    if hf_token:
+        env_vars.append(f"HF_TOKEN={hf_token}")
+    return " ".join(env_vars) + " "
+
+
 def run_remote(
     ssh: SshConnectionInfo,
     ssh_key_path: str,
@@ -78,7 +92,7 @@ def run_remote(
         f"{ssh.username}@{ssh.host}",
         # PYTHONUNBUFFERED forces line-buffered output without a PTY,
         # avoiding ANSI escape code noise from progress bars
-        f"PYTHONUNBUFFERED=1 {command}",
+        f"{_remote_env_prefix()}{command}",
     ]
 
     lines: list[str] = []
