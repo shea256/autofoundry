@@ -9,9 +9,9 @@ CLI tool to run ML experiment scripts across GPUs on multiple cloud providers.
 cli.py → planner.py → provisioner.py → executor.py → reporter.py
 ```
 
-- **CLI**: `src/autofoundry/cli.py` — `run`, `config`, `reserves`, `volumes`, `status`, `results`, `teardown` commands via Typer
+- **CLI**: `src/autofoundry/cli.py` — `run`, `config`, `inventory`, `volumes` (list, create), `status`, `results`, `teardown` commands via Typer
 - **Models**: `src/autofoundry/models.py` — GpuOffer, InstanceConfig, InstanceInfo, VolumeInfo, ProvisioningPlan
-- **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml`
+- **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml` (custom serializer outputs lowercase `true`/`false` for booleans)
 - **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect,lambdalabs}.py`
 - **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("operations", "units", "supply lines", "reserves", "sync tests")
 - **State**: `src/autofoundry/state.py` — SQLite-backed session persistence (WAL mode)
@@ -77,8 +77,12 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - Session states: CONFIGURING → PLANNING → PROVISIONING → RUNNING → REPORTING → COMPLETED/FAILED/PAUSED
 - Resume support: `--resume` flag restarts stopped instances and runs pending experiments
 
+## Inventory UI
+- `planner.py` displays up to 10 GPU offers per provider initially, with interactive expansion to view all
+
 ## Scripts
 - `scripts/run_autoresearch.sh` — clone, install deps, run. Works from scratch or with volumes (pulls on re-run).
+- Uses `--system` flag and `--no-install-package torch` to skip redundant downloads on images with pre-installed torch
 - Script outputs `---` delimiter followed by `key: value` metrics, parsed by `executor.parse_metrics()`
 
 ## Status
