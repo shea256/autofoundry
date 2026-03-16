@@ -94,7 +94,38 @@ class RunPodProvider:
         except httpx.HTTPError:
             return False
 
-    def list_gpu_offers(self, gpu_type: str | None = None) -> list[GpuOffer]:
+    def gpu_types_in_datacenter(self, datacenter_id: str) -> set[str]:
+        """Return set of gpu_type_ids available in a specific datacenter."""
+        query = """
+        query DataCenterGpus($input: GpuAvailabilityInput) {
+            dataCenters {
+                id
+                gpuAvailability(input: $input) {
+                    gpuTypeId
+                    stockStatus
+                }
+            }
+        }
+        """
+        resp = httpx.post(
+            self.GRAPHQL_URL,
+            json={"query": query, "variables": {"input": {"dataCenterId": datacenter_id}}},
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        datacenters = resp.json().get("data", {}).get("dataCenters", [])
+        available = set()
+        for dc in datacenters:
+            if dc.get("id") != datacenter_id:
+                continue
+            for gpu in dc.get("gpuAvailability", []):
+                status = (gpu.get("stockStatus") or "").lower()
+                if status not in ("", "out_of_stock", "unavailable"):
+                    available.add(gpu.get("gpuTypeId", ""))
+        return available
+
+    def list_gpu_offers(self, gpu_type: str | None = None, datacenter_id: str | None = None) -> list[GpuOffer]:
         # RunPod uses GraphQL for GPU type queries
         query = """
         query GpuTypes {
@@ -124,6 +155,11 @@ class RunPodProvider:
 
         gpu_types = result.get("data", {}).get("gpuTypes", [])
 
+        # If datacenter constraint, only show GPUs actually available there
+        dc_gpu_ids: set[str] | None = None
+        if datacenter_id:
+            dc_gpu_ids = self.gpu_types_in_datacenter(datacenter_id)
+
         offers = []
         for item in gpu_types:
             if item is None:
@@ -132,6 +168,9 @@ class RunPodProvider:
             display_name = item.get("displayName", type_id)
 
             if gpu_type and gpu_type.upper() not in display_name.upper():
+                continue
+
+            if dc_gpu_ids is not None and type_id not in dc_gpu_ids:
                 continue
 
             # Secure cloud pricing
@@ -233,6 +272,9 @@ class RunPodProvider:
 
         if config.volume_id:
             data["networkVolumeId"] = config.volume_id
+            # Pod must be in the same datacenter as the volume
+            if config.volume_region:
+                data["dataCenterIds"] = [config.volume_region]
 
         resp = self._client.post("/pods", json=data)
         if resp.status_code >= 300:

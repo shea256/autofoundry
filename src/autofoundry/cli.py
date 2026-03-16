@@ -74,7 +74,22 @@ def _resolve_script(script_arg: str | None, config: Config) -> str:
         raise SystemExit(1)
 
     # Try last-used script as default, fall back to bundled example
-    default = config.last_script if config.last_script else "scripts/run_autoresearch.sh"
+    default_abs = config.last_script if config.last_script else ""
+    if default_abs:
+        # Show as relative path if under cwd, otherwise absolute
+        try:
+            default = str(Path(default_abs).relative_to(Path.cwd()))
+        except ValueError:
+            default = default_abs
+        # Only use as default if the file still exists
+        if not Path(default_abs).exists():
+            default = ""
+
+    if not default:
+        # Fall back to scripts/run_autoresearch.sh relative to cwd
+        fallback = Path.cwd() / "scripts" / "run_autoresearch.sh"
+        if fallback.exists():
+            default = "scripts/run_autoresearch.sh"
 
     while True:
         prompt_text = "  [af.label]Script path[/af.label]"
@@ -139,59 +154,58 @@ def config(
     first_run_setup(existing)
 
 
-def _resolve_volume(
-    config: Config, volume_name: str, plan_providers: set,
-) -> str:
-    """Resolve a volume name to a volume ID, creating if necessary.
+def _get_volume_eligible_provider(
+    config: Config, plan_providers: set | None = None,
+) -> tuple:
+    """Return (provider_name, provider) for the first volume-capable provider.
 
-    Returns the volume ID string, or empty string if volumes aren't supported.
+    If plan_providers is given, only considers those providers.
+    Otherwise uses all configured providers.
+    Returns (None, None) if no eligible provider exists.
     """
     from autofoundry.models import ProviderName
     from autofoundry.providers import get_provider
 
     VOLUME_PROVIDERS = {ProviderName.RUNPOD, ProviderName.LAMBDALABS}
-    eligible = plan_providers & VOLUME_PROVIDERS
+    candidates = plan_providers if plan_providers is not None else set(config.configured_providers)
+    eligible = candidates & VOLUME_PROVIDERS
 
     if not eligible:
-        unsupported = ", ".join(p.value for p in plan_providers)
-        print_error(f"Network volumes not supported on: {unsupported}")
-        return ""
+        return None, None
 
-    # Use the first eligible provider (typically only one provider per plan)
     provider_name = next(iter(eligible))
     provider = get_provider(provider_name, config.api_keys[provider_name])
 
     if not hasattr(provider, "list_volumes"):
-        print_error(f"Volume support not implemented for {provider_name.value}")
-        return ""
+        return None, None
 
-    # Check for existing volume with this name
-    console.print(f"  [af.muted]Checking for volume '{volume_name}'...[/af.muted]")
-    volumes = provider.list_volumes()
-    for vol in volumes:
-        if vol.name == volume_name:
-            print_success(f"Found volume: {vol.name} ({vol.size_gb}GB, {vol.region})")
-            print_status("Mount path", vol.mount_path)
-            return vol.volume_id
+    return provider_name, provider
 
-    # Volume doesn't exist — create it
-    console.print(f"  [af.muted]Volume '{volume_name}' not found. Creating...[/af.muted]")
-    console.print()
+
+def _create_volume_interactive(
+    provider_name, provider, volume_name: str | None = None,
+) -> str:
+    """Prompt for volume details and create it. Returns volume_id or empty string."""
+    from autofoundry.models import ProviderName
 
     from rich.prompt import Confirm as RichConfirm
 
-    size_gb = IntPrompt.ask(
-        "  [af.label]Volume size (GB)[/af.label]",
-        default=100,
-    )
+    if not volume_name:
+        volume_name = Prompt.ask("  [af.label]Volume name[/af.label]")
+        if not volume_name.strip():
+            return ""
 
     if provider_name == ProviderName.RUNPOD:
+        size_gb = IntPrompt.ask(
+            "  [af.label]Volume size (GB)[/af.label]",
+            default=100,
+        )
         region = Prompt.ask(
             "  [af.label]Data center ID[/af.label]",
             default="US-TX-3",
         )
         if not RichConfirm.ask(
-            f"  [af.label]Create {size_gb}GB volume in {region}?[/af.label]",
+            f"  [af.label]Create {size_gb}GB volume '{volume_name}' in {region}?[/af.label]",
             default=True,
         ):
             return ""
@@ -213,6 +227,170 @@ def _resolve_volume(
     print_success(f"Volume created: {vol.name} ({vol.volume_id})")
     print_status("Mount path", vol.mount_path)
     return vol.volume_id
+
+
+def _resolve_volume(
+    config: Config, volume_name: str, plan_providers: set | None = None,
+) -> tuple[str, str, str]:
+    """Resolve a volume name to a volume ID, creating if necessary.
+
+    Returns (volume_id, volume_region, provider_name_value), or ("", "", "").
+    """
+    provider_name, provider = _get_volume_eligible_provider(config, plan_providers)
+
+    if provider_name is None:
+        print_error("No configured providers support network volumes (RunPod, Lambda Labs)")
+        return "", "", ""
+
+    pname = provider_name.value
+
+    # Check for existing volume with this name
+    console.print(f"  [af.muted]Checking for volume '{volume_name}'...[/af.muted]")
+    volumes = provider.list_volumes()
+    for vol in volumes:
+        if vol.name == volume_name:
+            print_success(f"Found volume: {vol.name} ({vol.size_gb}GB, {vol.region})")
+            print_status("Mount path", vol.mount_path)
+            return vol.volume_id, vol.region, pname
+
+    # Volume doesn't exist — create it
+    console.print(f"  [af.muted]Volume '{volume_name}' not found. Creating...[/af.muted]")
+    console.print()
+    vid = _create_volume_interactive(provider_name, provider, volume_name)
+    # Re-fetch to get region of newly created volume
+    if vid:
+        for vol in provider.list_volumes():
+            if vol.volume_id == vid:
+                return vid, vol.region, pname
+    return vid, "", pname
+
+
+def _interactive_volume_prompt(
+    config: Config, plan_providers: set | None = None,
+) -> tuple[str, str, str]:
+    """Prompt user to attach a volume (interactive mode).
+
+    Queries all volume-capable providers and shows volumes in a single list.
+    Returns (volume_id, volume_region, provider_name_value), or ("", "", "").
+    """
+    from autofoundry.config import PROVIDER_DISPLAY
+    from autofoundry.models import ProviderName
+    from autofoundry.providers import get_provider
+    from autofoundry.theme import make_table
+
+    VOLUME_PROVIDERS = {ProviderName.RUNPOD, ProviderName.LAMBDALABS}
+    candidates = plan_providers if plan_providers is not None else set(config.configured_providers)
+    eligible = sorted(candidates & VOLUME_PROVIDERS, key=lambda p: p.value)
+
+    if not eligible:
+        return "", "", ""
+
+    # Gather volumes from all eligible providers
+    all_volumes: list[tuple] = []  # (VolumeInfo, provider_name, provider_instance)
+    providers_map = {}
+    for pname in eligible:
+        prov = get_provider(pname, config.api_keys[pname])
+        if not hasattr(prov, "list_volumes"):
+            continue
+        providers_map[pname] = prov
+        try:
+            for vol in prov.list_volumes():
+                all_volumes.append((vol, pname, prov))
+        except Exception as e:
+            print_error(f"Could not list volumes on {PROVIDER_DISPLAY.get(pname, pname.value)}: {e}")
+
+    console.print()
+    print_header("NETWORK VOLUMES")
+    console.print()
+
+    if all_volumes:
+        table = make_table(f"{len(all_volumes)} volume(s)", [
+            ("#", "af.muted"),
+            ("Provider", "af.secondary"),
+            ("Name", "af.primary"),
+            ("Size", ""),
+            ("Region", ""),
+            ("Mount Path", "af.muted"),
+        ])
+        for i, (vol, pname, _prov) in enumerate(all_volumes, 1):
+            table.add_row(
+                str(i),
+                PROVIDER_DISPLAY.get(pname, pname.value),
+                vol.name,
+                f"{vol.size_gb}GB",
+                vol.region or "—",
+                vol.mount_path,
+            )
+        console.print(table)
+        console.print()
+
+        pick = Prompt.ask(
+            "  [af.label]Attach a volume?[/af.label] "
+            "[af.muted](# to select, 'new' to create, Enter to skip)[/af.muted]",
+            default="",
+        )
+
+        if not pick.strip():
+            return "", "", ""
+
+        if pick.strip().lower() == "new":
+            # Pick which provider to create on
+            if len(providers_map) == 1:
+                create_pname = next(iter(providers_map))
+            else:
+                choice = Prompt.ask(
+                    "  [af.label]Provider[/af.label]",
+                    choices=[p.value for p in providers_map],
+                )
+                create_pname = ProviderName(choice)
+            create_prov = providers_map[create_pname]
+            vid = _create_volume_interactive(create_pname, create_prov)
+            if vid:
+                for vol in create_prov.list_volumes():
+                    if vol.volume_id == vid:
+                        return vid, vol.region, create_pname.value
+            return vid, "", create_pname.value
+
+        try:
+            idx = int(pick) - 1
+            if 0 <= idx < len(all_volumes):
+                vol, pname, _prov = all_volumes[idx]
+                print_success(f"Attaching volume: {vol.name} ({vol.size_gb}GB, {vol.region})")
+                print_status("Mount path", vol.mount_path)
+                return vol.volume_id, vol.region, pname.value
+            else:
+                print_error(f"Invalid selection. Choose 1-{len(all_volumes)}")
+                return "", "", ""
+        except ValueError:
+            print_error("Invalid input")
+            return "", "", ""
+    else:
+        providers_str = ", ".join(PROVIDER_DISPLAY.get(p, p.value) for p in eligible)
+        console.print(f"  [af.muted]No volumes found on {providers_str}.[/af.muted]")
+        console.print()
+
+        from rich.prompt import Confirm as RichConfirm
+
+        if RichConfirm.ask(
+            "  [af.label]Create a new volume?[/af.label]",
+            default=False,
+        ):
+            if len(providers_map) == 1:
+                create_pname = next(iter(providers_map))
+            else:
+                choice = Prompt.ask(
+                    "  [af.label]Provider[/af.label]",
+                    choices=[p.value for p in providers_map],
+                )
+                create_pname = ProviderName(choice)
+            create_prov = providers_map[create_pname]
+            vid = _create_volume_interactive(create_pname, create_prov)
+            if vid:
+                for vol in create_prov.list_volumes():
+                    if vol.volume_id == vid:
+                        return vid, vol.region, create_pname.value
+            return vid, "", create_pname.value
+        return "", "", ""
 
 
 def _print_command_help(command: str, description: str, options: list[tuple[str, str]]) -> None:
@@ -249,7 +427,7 @@ def run(
             ("--gpu, -g TEXT", "GPU type (e.g. H100)"),
             ("--volume, -v TEXT", "Network volume name (creates if needed)"),
             ("--provider, -p TEXT", "Provider filter (e.g. primeintellect, vastai)"),
-            ("--region TEXT", "Region filter (e.g. US, EU)"),
+            ("--region TEXT", "Region filter (e.g. US, EU, secure, community)"),
             ("--auto", "Auto-select cheapest offer, no prompts"),
             ("--help, -h", "Show this help"),
         ])
@@ -414,29 +592,37 @@ def run(
 
     _show_session_summary(session)
 
-    # Planning — select providers/offers
+    # Resolve network volume (only when explicitly requested via --volume)
+    volume_id = ""
+    volume_region = ""
+    vol_provider_filter = provider  # CLI --provider flag
+    vol_region_filter = region      # CLI --region flag
+    if volume:
+        console.print()
+        volume_id, volume_region, vol_pname = _resolve_volume(config, volume)
+        if volume_id:
+            vol_provider_filter = vol_pname
+            console.print()
+
+    # Planning — select providers/offers (filtered by volume constraints if any)
     if auto:
         from autofoundry.planner import auto_plan
         plan = auto_plan(
             config, gpu_type, num_experiments, script_path,
-            provider_filter=provider, region_filter=region,
+            provider_filter=vol_provider_filter, region_filter=vol_region_filter,
+            datacenter_id=volume_region or None,
         )
     else:
         from autofoundry.planner import interactive_plan
-        plan = interactive_plan(config, gpu_type, num_experiments, script_path)
+        plan = interactive_plan(
+            config, gpu_type, num_experiments, script_path,
+            provider_filter=vol_provider_filter, region_filter=vol_region_filter,
+            datacenter_id=volume_region or None,
+        )
     if plan is None:
         store.update_session_status(SessionStatus.FAILED)
         store.close()
         raise typer.Exit(1)
-
-    # Resolve network volume if requested
-    volume_id = ""
-    if volume:
-        plan_providers = {offer.provider for offer, _ in plan.offers}
-        console.print()
-        volume_id = _resolve_volume(config, volume, plan_providers)
-        if volume_id:
-            console.print()
 
     store.update_session_status(SessionStatus.PROVISIONING)
 
@@ -452,6 +638,7 @@ def run(
             config, plan, session_id, store,
             gpu_type_filter=gpu_type,
             volume_id=volume_id,
+            volume_region=volume_region,
         )
     except KeyboardInterrupt:
         console.print()

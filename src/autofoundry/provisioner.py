@@ -209,6 +209,7 @@ def provision_instances(
     store: SessionStore,
     gpu_type_filter: str | None = None,
     volume_id: str = "",
+    volume_region: str = "",
 ) -> list[InstanceInfo]:
     """Provision all instances in the plan in parallel.
 
@@ -216,6 +217,7 @@ def provision_instances(
         gpu_type_filter: User's original GPU search term (e.g., "H100") for retry queries.
             If None, falls back to the specific offer's gpu_type.
         volume_id: Network volume ID to attach to instances.
+        volume_region: Region/datacenter of the volume (for co-location).
     """
     print_header(f"{TERMS['provisioning']}")
     console.print()
@@ -271,6 +273,7 @@ def provision_instances(
                 ssh_public_key=ssh_pub_key,
                 offer_id=selected.offer_id,
                 volume_id=volume_id,
+                volume_region=volume_region,
                 metadata=selected.metadata,
             )
             shared_claimed.add(selected.offer_id)

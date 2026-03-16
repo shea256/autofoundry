@@ -20,25 +20,33 @@ from autofoundry.theme import (
 
 
 def _query_provider_offers(
-    provider_name: ProviderName, api_key: str, gpu_type: str
+    provider_name: ProviderName, api_key: str, gpu_type: str,
+    datacenter_id: str | None = None,
 ) -> tuple[ProviderName, list[GpuOffer], str | None]:
     """Query a single provider for GPU offers. Returns (provider, offers, error)."""
     try:
         provider = get_provider(provider_name, api_key)
-        offers = provider.list_gpu_offers(gpu_type)
+        # Only RunPod supports datacenter_id filtering
+        if datacenter_id and provider_name == ProviderName.RUNPOD:
+            offers = provider.list_gpu_offers(gpu_type, datacenter_id=datacenter_id)
+        else:
+            offers = provider.list_gpu_offers(gpu_type)
         return (provider_name, offers, None)
     except Exception as e:
         return (provider_name, [], str(e))
 
 
-def query_all_offers(config: Config, gpu_type: str) -> list[GpuOffer]:
+def query_all_offers(
+    config: Config, gpu_type: str, datacenter_id: str | None = None,
+) -> list[GpuOffer]:
     """Query all configured providers for GPU offers concurrently."""
     all_offers: list[GpuOffer] = []
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {
             pool.submit(
-                _query_provider_offers, provider, config.api_keys[provider], gpu_type
+                _query_provider_offers, provider, config.api_keys[provider], gpu_type,
+                datacenter_id,
             ): provider
             for provider in config.configured_providers
         }
@@ -67,15 +75,17 @@ def query_all_offers(config: Config, gpu_type: str) -> list[GpuOffer]:
     return all_offers
 
 
-def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
-    """Display GPU offers grouped by provider. Returns the displayed offers list (for selection by #)."""
+def display_offers(offers: list[GpuOffer]) -> tuple[list[GpuOffer], dict]:
+    """Display GPU offers grouped by provider.
+
+    Returns (displayed_offers, truncated_providers) where truncated_providers
+    maps short names to (ProviderName, by_provider_dict) for lazy expansion.
+    """
     if not offers:
         print_error(f"No GPU {TERMS['instances'].lower()} found matching your criteria.")
-        return []
+        return [], {}
 
     from collections import defaultdict
-
-    from rich.prompt import Prompt
 
     INITIAL_PER_PROVIDER = 10
 
@@ -91,14 +101,13 @@ def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
         ProviderName.PRIMEINTELLECT,
     ]
     provider_order = [p for p in _PROVIDER_DISPLAY_ORDER if p in by_provider]
-    # Append any unknown providers at the end
     for p in by_provider:
         if p not in provider_order:
             provider_order.append(p)
 
     displayed: list[GpuOffer] = []
     global_num = 1
-    truncated_providers: dict[str, tuple[ProviderName, int]] = {}
+    truncated_providers: dict[str, tuple[ProviderName, dict]] = {}
 
     for provider in provider_order:
         all_provider_offers = by_provider[provider]
@@ -117,39 +126,34 @@ def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
 
         if hidden > 0:
             short_name = display_name.lower().split()[0]
-            truncated_providers[short_name] = (provider, total_count)
+            truncated_providers[short_name] = (provider, by_provider)
             console.print(
-                f"  [af.muted]{hidden} more — type [/af.muted]"
-                f"[af.primary]{short_name}[/af.primary]"
-                f"[af.muted] to see all[/af.muted]"
+                f"  [af.muted]{hidden} more — type '{short_name}' to expand[/af.muted]"
             )
 
     console.print()
+    return displayed, truncated_providers
 
-    # Let the user expand truncated providers
-    while truncated_providers:
-        choice = Prompt.ask(
-            "  [af.label]Expand a provider (or Enter to continue)[/af.label]",
-            default="",
-        )
-        if not choice.strip():
-            break
-        key = choice.strip().lower()
-        if key not in truncated_providers:
-            console.print(f"  [af.muted]Unknown provider. Options: {', '.join(truncated_providers)}[/af.muted]")
-            continue
 
-        provider, _ = truncated_providers.pop(key)
-        all_provider_offers = by_provider[provider]
-        remaining = all_provider_offers[INITIAL_PER_PROVIDER:]
-        display_name = PROVIDER_DISPLAY.get(provider, provider.value)
+def expand_provider(
+    key: str,
+    truncated_providers: dict,
+    displayed: list[GpuOffer],
+) -> list[GpuOffer]:
+    """Expand a truncated provider's remaining offers. Mutates truncated_providers and displayed."""
+    INITIAL_PER_PROVIDER = 10
 
-        displayed, global_num = _render_provider_table(
-            f"{display_name} — remaining {len(remaining)} {TERMS['instances'].lower()}",
-            remaining, displayed, global_num,
-        )
-        console.print()
+    provider, by_provider = truncated_providers.pop(key)
+    all_provider_offers = by_provider[provider]
+    remaining = all_provider_offers[INITIAL_PER_PROVIDER:]
+    display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
+    global_num = len(displayed) + 1
+    displayed, _ = _render_provider_table(
+        f"{display_name} — remaining {len(remaining)} {TERMS['instances'].lower()}",
+        remaining, displayed, global_num,
+    )
+    console.print()
     return displayed
 
 
@@ -217,13 +221,14 @@ def auto_plan(
     script_path: str,
     provider_filter: str | None = None,
     region_filter: str | None = None,
+    datacenter_id: str | None = None,
 ) -> ProvisioningPlan | None:
     """Non-interactive planning: auto-select cheapest matching offer."""
     print_header(TERMS["planning"])
     console.print()
     console.print(f"  [af.muted]Querying supply lines for {gpu_type} availability...[/af.muted]")
 
-    offers = query_all_offers(config, gpu_type)
+    offers = query_all_offers(config, gpu_type, datacenter_id=datacenter_id)
     if not offers:
         print_error(f"No {gpu_type} offers found.")
         return None
@@ -246,13 +251,20 @@ def auto_plan(
         _NON_GEOGRAPHIC_REGIONS = {"secure", "community"}
 
         def _region_match(o: GpuOffer) -> bool:
-            # Offers without geographic regions always pass
+            # If offer region is a RunPod cloud type (secure/community),
+            # treat --region as an explicit cloud-type filter.
             if o.region and o.region.lower() in _NON_GEOGRAPHIC_REGIONS:
-                return True
+                return o.region.lower() == rf
+
+            # Offers without any region metadata always pass
             if not o.region:
                 return True
+
+            # Geographic region match (e.g. US, EU)
             if rf in o.region.lower():
                 return True
+
+            # Datacenter ID match as fallback
             dc = o.metadata.get("data_center_id", "")
             return bool(dc and rf in dc.lower())
 
@@ -297,15 +309,32 @@ def auto_plan(
 
 
 def interactive_plan(
-    config: Config, gpu_type: str, total_experiments: int, script_path: str
+    config: Config,
+    gpu_type: str,
+    total_experiments: int,
+    script_path: str,
+    provider_filter: str | None = None,
+    region_filter: str | None = None,
+    datacenter_id: str | None = None,
 ) -> ProvisioningPlan | None:
     """Full interactive planning flow: query, display, recommend, confirm."""
     print_header(TERMS["planning"])
     console.print()
-    console.print(f"  [af.muted]Querying supply lines for {gpu_type} availability...[/af.muted]")
+    if datacenter_id:
+        console.print(f"  [af.muted]Querying supply lines for {gpu_type} in {datacenter_id}...[/af.muted]")
+    else:
+        console.print(f"  [af.muted]Querying supply lines for {gpu_type} availability...[/af.muted]")
 
-    offers = query_all_offers(config, gpu_type)
-    displayed = display_offers(offers)
+    offers = query_all_offers(config, gpu_type, datacenter_id=datacenter_id)
+
+    # Apply provider/region filters (e.g. when a volume constrains the choice)
+    if provider_filter:
+        pf = provider_filter.lower()
+        offers = [o for o in offers if o.provider.value == pf]
+    if region_filter:
+        rf = region_filter.lower()
+        offers = [o for o in offers if o.region and rf in o.region.lower()]
+    displayed, truncated = display_offers(offers)
 
     if not displayed:
         return None
@@ -329,16 +358,46 @@ def interactive_plan(
     selections: list[tuple[GpuOffer, int]] = []
 
     while True:
-        pick = Prompt.ask(
-            f"  [af.label]Select {TERMS['instance'].lower()} # (or 'done' to confirm)[/af.label]",
-            default="1" if not selections else "done",
-        )
+        if not selections:
+            pick = Prompt.ask(
+                f"  [af.label]Select {TERMS['instance'].lower()} #[/af.label]",
+                default="1",
+            )
+        else:
+            # Show current plan and ask to confirm or add more
+            total_instances = sum(c for _, c in selections)
+            cost = sum(o.price_per_hour * c for o, c in selections)
+            console.print(
+                f"  [af.primary]DEPLOYMENT PLAN:[/af.primary] "
+                f"{total_instances} {TERMS['instances'].lower()}, "
+                f"{total_experiments} {TERMS['experiments'].lower()}, "
+                f"${cost:.2f}/hr"
+            )
+            pick = Prompt.ask(
+                "  [af.label]Confirm?[/af.label] "
+                "[af.muted](y/Enter to deploy, + to add more, n to cancel)[/af.muted]",
+                default="y",
+            )
+            stripped = pick.strip().lower()
+            if stripped in ("y", ""):
+                break
+            if stripped == "n":
+                console.print("  [af.muted]Deployment cancelled.[/af.muted]")
+                return None
+            if stripped == "+":
+                # Go back to selection prompt
+                pick = Prompt.ask(
+                    f"  [af.label]Select {TERMS['instance'].lower()} #[/af.label]",
+                )
+            else:
+                print_error("Enter y, +, or n")
+                continue
 
-        if pick.lower() == "done":
-            if not selections:
-                # Use recommendation as default
-                selections = recommendation
-            break
+        # Check if user typed a provider name to expand truncated results
+        pick_lower = pick.strip().lower()
+        if pick_lower in truncated:
+            offers = expand_provider(pick_lower, truncated, offers)
+            continue
 
         try:
             idx = int(pick) - 1
@@ -346,7 +405,7 @@ def interactive_plan(
                 print_error(f"Invalid selection. Choose 1-{len(offers)}")
                 continue
         except ValueError:
-            print_error("Enter a number or 'done'")
+            print_error("Enter a number or provider name to expand")
             continue
 
         selected = offers[idx]
@@ -358,43 +417,26 @@ def interactive_plan(
             if not Confirm.ask("  [af.label]Continue anyway?[/af.label]", default=False):
                 continue
 
-        count = IntPrompt.ask(
-            f"  [af.label]How many {TERMS['instances'].lower()} of this type?[/af.label]",
-            default=1,
-        )
+        # For multi-experiment runs, ask how many; otherwise default to 1
+        if total_experiments > 1:
+            count = IntPrompt.ask(
+                f"  [af.label]How many {TERMS['instances'].lower()} of this type?[/af.label]",
+                default=1,
+            )
+        else:
+            count = 1
+
         selections.append((selected, count))
 
-        total_instances = sum(c for _, c in selections)
-        cost = sum(o.price_per_hour * c for o, c in selections)
-        print_success(
-            f"Selected {total_instances} {TERMS['instances'].lower()} "
-            f"(${cost:.2f}/hr total)"
-        )
-        console.print()
-
     if not selections:
-        print_error("No instances selected.")
-        return None
+        if recommendation:
+            selections = recommendation
+        else:
+            print_error("No instances selected.")
+            return None
 
-    # Confirm
-    plan = ProvisioningPlan(
+    return ProvisioningPlan(
         offers=selections,
         total_experiments=total_experiments,
         script_path=script_path,
     )
-
-    total_instances = plan.total_instances
-    cost = plan.estimated_cost_per_hour
-    console.print()
-    console.print(
-        f"  [af.primary]DEPLOYMENT PLAN:[/af.primary] "
-        f"{total_instances} {TERMS['instances'].lower()}, "
-        f"{total_experiments} {TERMS['experiments'].lower()}, "
-        f"${cost:.2f}/hr"
-    )
-
-    if not Confirm.ask("  [af.label]Confirm deployment?[/af.label]", default=True):
-        console.print("  [af.muted]Deployment cancelled.[/af.muted]")
-        return None
-
-    return plan
