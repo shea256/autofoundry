@@ -188,10 +188,10 @@ Select PRIME Intellect or Vast.ai instead of RunPod/Lambda Labs.
 Each provider has a build-and-run script for one-command end-to-end testing:
 
 ```bash
-scripts/build_and_run_autoresearch_on_runpod.sh
-scripts/build_and_run_autoresearch_on_lambdalabs.sh
-scripts/build_and_run_autoresearch_on_vastai.sh
-scripts/build_and_run_autoresearch_on_primeintellect.sh
+scripts/run_autoresearch_on_runpod.sh
+scripts/run_autoresearch_on_lambdalabs.sh
+scripts/run_autoresearch_on_vastai.sh
+scripts/run_autoresearch_on_primeintellect.sh
 ```
 
 **Pass:** Each script builds autofoundry from source and runs autoresearch on the target provider end-to-end.
