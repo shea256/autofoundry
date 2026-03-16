@@ -21,6 +21,7 @@ from autofoundry.theme import (
     print_header,
     print_status,
     print_success,
+    term,
 )
 
 
@@ -107,7 +108,7 @@ def _prompt_session_params(
     config: Config, script_arg: str | None = None
 ) -> tuple[str, int, str]:
     """Prompt user for script path, experiment count, and GPU type."""
-    print_header(f"{TERMS['experiments']} CONFIGURATION")
+    print_header(f"{TERMS['experiment']} CONFIGURATION")
     console.print()
 
     # Script path
@@ -135,7 +136,7 @@ def _show_session_summary(session: Session) -> None:
     console.print()
     print_status(TERMS["session"], session.session_id)
     print_status("Script", session.script_path)
-    print_status(TERMS["experiments"], str(session.total_experiments))
+    print_status(term("experiments", session.total_experiments), str(session.total_experiments))
     print_status("GPU", session.gpu_type)
     console.print()
 
@@ -468,7 +469,7 @@ def run(
 
         console.print(
             f"  [af.primary]{len(pending)} pending "
-            f"{TERMS['experiments'].lower()} to run[/af.primary]"
+            f"{term('experiments', len(pending)).lower()} to run[/af.primary]"
         )
         console.print()
 
@@ -498,12 +499,12 @@ def run(
         script_path = session.script_path
         num_pending = len(pending)
 
-        print_header(f"{TERMS['experiments']} EXECUTION")
+        print_header(TERMS['experiment'])
         console.print()
         console.print(
             f"  [af.primary]Resuming {num_pending} "
-            f"{TERMS['experiments'].lower()} across "
-            f"{len(instances)} {TERMS['instances'].lower()}...[/af.primary]"
+            f"{term('experiments', num_pending).lower()} across "
+            f"{len(instances)} {term('instances', len(instances)).lower()}...[/af.primary]"
         )
         console.print()
 
@@ -529,7 +530,7 @@ def run(
         # Teardown prompt
         console.print()
         action = Prompt.ask(
-            f"  [af.label]What to do with {TERMS['instances'].lower()}?[/af.label]\n"
+            f"  [af.label]What to do with {term('instances', len(instances)).lower()}?[/af.label]\n"
             "  [af.muted]  stop = release GPU, keep disk (fast restart later)\n"
             "  terminate = delete everything\n"
             "  keep = leave running[/af.muted]\n"
@@ -682,12 +683,12 @@ def run(
     from autofoundry.executor import run_all_experiments
     from autofoundry.reporter import print_report
 
-    print_header(f"{TERMS['experiments']} EXECUTION")
+    print_header(TERMS['experiment'])
     console.print()
     console.print(
         f"  [af.primary]Deploying {num_experiments} "
-        f"{TERMS['experiments'].lower()} across "
-        f"{len(instances)} {TERMS['instances'].lower()}...[/af.primary]"
+        f"{term('experiments', num_experiments).lower()} across "
+        f"{len(instances)} {term('instances', len(instances)).lower()}...[/af.primary]"
     )
     console.print()
 
@@ -719,7 +720,7 @@ def run(
         console.print("  [af.muted]Auto mode: terminating instances...[/af.muted]")
     else:
         action = Prompt.ask(
-            f"  [af.label]What to do with {TERMS['instances'].lower()}?[/af.label]\n"
+            f"  [af.label]What to do with {term('instances', len(instances)).lower()}?[/af.label]\n"
             "  [af.muted]  stop = release GPU, keep disk (fast restart later)\n"
             "  terminate = delete everything\n"
             "  keep = leave running[/af.muted]\n"
@@ -1012,7 +1013,7 @@ def status(
             session = store.get_session()
             if session:
                 status_style = "af.success" if session.status == SessionStatus.COMPLETED else "af.primary"
-                print_status(sid, f"{display_status(session.status.value)} — {session.gpu_type} — {session.total_experiments} {TERMS['experiments'].lower()}", style=status_style)
+                print_status(sid, f"{display_status(session.status.value)} — {session.gpu_type} — {session.total_experiments} {term('experiments', session.total_experiments).lower()}", style=status_style)
             store.close()
         console.print()
         return
@@ -1155,7 +1156,7 @@ def teardown(
         store.close()
         return
 
-    console.print(f"  [af.primary]{len(instances)} {TERMS['instances'].lower()} to terminate:[/af.primary]")
+    console.print(f"  [af.primary]{len(instances)} {term('instances', len(instances)).lower()} to terminate:[/af.primary]")
     for inst in instances:
         print_status(inst.instance_id, f"{inst.provider.value} {inst.gpu_type} [{display_status(inst.status.value)}]")
     console.print()

@@ -26,6 +26,7 @@ from autofoundry.theme import (
     print_error,
     print_header,
     print_success,
+    term,
 )
 
 # Provider-native default images — latest CUDA available per platform
@@ -282,7 +283,7 @@ def provision_instances(
 
     total = len(tasks)
     console.print(
-        f"  [af.primary]Activating {total} {TERMS['instances'].lower()}...[/af.primary]"
+        f"  [af.primary]Activating {total} {term('instances', total).lower()}...[/af.primary]"
     )
     console.print()
 
@@ -341,11 +342,11 @@ def provision_instances(
     console.print()
     if instances:
         print_success(
-            f"{len(instances)}/{total} {TERMS['instances'].lower()} online"
+            f"{len(instances)}/{total} {term('instances', len(instances)).lower()} online"
         )
     if failed:
         print_error(
-            f"{failed} {TERMS['instances'].lower()} failed to activate"
+            f"{failed} {term('instances', failed).lower()} failed to activate"
         )
     console.print()
 
@@ -373,7 +374,7 @@ def restart_instances(
 
     console.print(
         f"  [af.primary]Checking {len(stored_instances)} "
-        f"{TERMS['instances'].lower()}...[/af.primary]"
+        f"{term('instances', len(stored_instances)).lower()}...[/af.primary]"
     )
     console.print()
 
@@ -434,11 +435,11 @@ def restart_instances(
     if live:
         print_success(
             f"{len(live)}/{len(stored_instances)} "
-            f"{TERMS['instances'].lower()} online"
+            f"{term('instances', len(live)).lower()} online"
         )
     if lost:
         print_error(
-            f"{lost} {TERMS['instances'].lower()} lost (deleted or unreachable)"
+            f"{lost} {term('instances', lost).lower()} lost (deleted or unreachable)"
         )
     console.print()
 

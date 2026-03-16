@@ -16,6 +16,7 @@ from autofoundry.theme import (
     print_error,
     print_header,
     print_success,
+    term,
 )
 
 
@@ -60,7 +61,7 @@ def query_all_offers(
                 elif offers:
                     console.print(
                         f"  [af.success]OK:[/af.success] {display} — "
-                        f"{len(offers)} {TERMS['instances'].lower()} found"
+                        f"{len(offers)} {term('instances', len(offers)).lower()} found"
                     )
                 else:
                     console.print(
@@ -116,7 +117,7 @@ def display_offers(offers: list[GpuOffer]) -> tuple[list[GpuOffer], dict]:
         display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
         hidden = total_count - len(show_offers)
-        title = f"{display_name} — {total_count} {TERMS['instances'].lower()}"
+        title = f"{display_name} — {total_count} {term('instances', total_count).lower()}"
         if hidden > 0:
             title += f" (showing {len(show_offers)})"
 
@@ -150,7 +151,7 @@ def expand_provider(
 
     global_num = len(displayed) + 1
     displayed, _ = _render_provider_table(
-        f"{display_name} — remaining {len(remaining)} {TERMS['instances'].lower()}",
+        f"{display_name} — remaining {len(remaining)} {term('instances', len(remaining)).lower()}",
         remaining, displayed, global_num,
     )
     console.print()
@@ -300,7 +301,7 @@ def auto_plan(
     console.print(
         f"  [af.primary]DEPLOYMENT PLAN:[/af.primary] "
         f"1 {TERMS['instance'].lower()}, "
-        f"{total_experiments} {TERMS['experiment'].lower()}, "
+        f"{total_experiments} {term('experiments', total_experiments).lower()}, "
         f"${cheapest.price_per_hour:.2f}/hr"
     )
     console.print()
@@ -369,8 +370,8 @@ def interactive_plan(
             cost = sum(o.price_per_hour * c for o, c in selections)
             console.print(
                 f"  [af.primary]DEPLOYMENT PLAN:[/af.primary] "
-                f"{total_instances} {TERMS['instances'].lower()}, "
-                f"{total_experiments} {TERMS['experiments'].lower()}, "
+                f"{total_instances} {term('instances', total_instances).lower()}, "
+                f"{total_experiments} {term('experiments', total_experiments).lower()}, "
                 f"${cost:.2f}/hr"
             )
             pick = Prompt.ask(

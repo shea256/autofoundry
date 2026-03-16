@@ -1,5 +1,7 @@
 """NGE-inspired terminal theme for autofoundry."""
 
+from __future__ import annotations
+
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -31,6 +33,15 @@ TERMS = {
     "shutdown": "TERMINATION PROTOCOL",
     "offers": "RESERVES",
 }
+
+_PLURAL_TO_SINGULAR = {"instances": "instance", "experiments": "experiment"}
+
+
+def term(key: str, count: int | None = None) -> str:
+    """Return themed term, picking singular form when count is 1."""
+    if count == 1 and key in _PLURAL_TO_SINGULAR:
+        return TERMS[_PLURAL_TO_SINGULAR[key]]
+    return TERMS[key]
 
 # Display names for InstanceStatus values
 INSTANCE_STATUS_DISPLAY = {
