@@ -10,10 +10,10 @@ Autofoundry is a CLI companion to [Karpathy's autoresearch](https://github.com/k
 
 ## Supported Providers
 
-- **RunPod** — Secure and Community cloud
-- **Vast.ai** — Global GPU marketplace
-- **PRIME Intellect** — Decentralized GPU network
-- **Lambda Labs** — On-demand cloud GPUs
+- **[RunPod](https://www.runpod.io/)** — Secure and Community cloud
+- **[Vast.ai](https://vast.ai/)** — Global GPU marketplace
+- **[PRIME Intellect](https://www.primeintellect.ai/)** — Decentralized GPU network
+- **[Lambda Labs](https://lambdalabs.com/)** — On-demand cloud GPUs
 
 ## Quickstart
 
