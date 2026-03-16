@@ -15,7 +15,7 @@ autofoundry run --help
 autofoundry build --help  # expect error
 ```
 
-**Pass:** Help shows config, reserves, volumes, run, status, results, teardown. No build command.
+**Pass:** Help shows config, inventory, volumes, run, status, results, teardown. No build command.
 
 ---
 
@@ -30,14 +30,14 @@ autofoundry config
 
 ---
 
-## 3. Browse reserves
+## 3. Browse inventory
 
 ```bash
-autofoundry reserves
-autofoundry reserves --gpu A100
+autofoundry inventory
+autofoundry inventory --gpu A100
 ```
 
-**Pass:** Shows GPU reserves from configured providers in a formatted table.
+**Pass:** Shows GPU inventory from configured providers in a formatted table.
 
 ---
 
@@ -183,18 +183,18 @@ Select PRIME Intellect or Vast.ai instead of RunPod/Lambda Labs.
 
 ---
 
-## 11. Quick provider scripts
+## 11. Quick provider one-liners
 
-Each provider has a build-and-run script for one-command end-to-end testing:
+One-command end-to-end testing per provider:
 
 ```bash
-scripts/run_autoresearch_on_runpod.sh
-scripts/run_autoresearch_on_lambdalabs.sh
-scripts/run_autoresearch_on_vastai.sh
-scripts/run_autoresearch_on_primeintellect.sh
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider runpod --region US --auto
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider lambdalabs --region US --auto
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider vastai --auto
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider primeintellect --auto
 ```
 
-**Pass:** Each script builds autofoundry from source and runs autoresearch on the target provider end-to-end.
+**Pass:** Each command provisions, runs autoresearch, reports metrics, and tears down on the target provider.
 
 ---
 

@@ -42,7 +42,7 @@ def _default(
         console.print()
         console.print("  [af.muted]COMMANDS:[/af.muted]")
         console.print("    [af.secondary]config[/af.secondary]    Configure API keys, SSH key, and default GPU type")
-        console.print("    [af.secondary]reserves[/af.secondary]  Browse GPU reserves across supply lines")
+        console.print("    [af.secondary]inventory[/af.secondary] Browse GPU inventory across supply lines")
         console.print("    [af.secondary]volumes[/af.secondary]   List network volumes across providers")
         console.print("    [af.secondary]run[/af.secondary]       Launch GPU experiment orchestration engine")
         console.print("    [af.secondary]status[/af.secondary]    Show status of operations and instances")
@@ -73,8 +73,8 @@ def _resolve_script(script_arg: str | None, config: Config) -> str:
         print_error(f"File not found: {path}")
         raise SystemExit(1)
 
-    # Try last-used script as default
-    default = config.last_script if config.last_script else None
+    # Try last-used script as default, fall back to bundled example
+    default = config.last_script if config.last_script else "scripts/run_autoresearch.sh"
 
     while True:
         prompt_text = "  [af.label]Script path[/af.label]"
@@ -622,13 +622,13 @@ def volumes(
 
 
 @app.command(context_settings={"help_option_names": []})
-def reserves(
+def inventory(
     help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type to filter (e.g. H100)"),
 ) -> None:
-    """Browse GPU reserves across all configured supply lines."""
+    """Browse GPU inventory across all configured supply lines."""
     if help_:
-        _print_command_help("autofoundry reserves", "Browse GPU reserves across supply lines", [
+        _print_command_help("autofoundry inventory", "Browse GPU inventory across supply lines", [
             ("--gpu, -g TEXT", "GPU type to filter (e.g. H100)"),
             ("--help, -h", "Show this help"),
         ])
@@ -638,13 +638,19 @@ def reserves(
     print_banner(version=__version__)
     config = _load_or_setup_config()
 
-    gpu_type = gpu or config.default_gpu_type
+    if gpu:
+        gpu_type = gpu
+    else:
+        gpu_type = Prompt.ask(
+            "  [af.label]GPU type[/af.label]",
+            default=config.default_gpu_type,
+        )
     print_status("Searching for", gpu_type)
     console.print()
 
     all_offers = query_all_offers(config, gpu_type)
     if not all_offers:
-        print_error(f"No reserves found for {gpu_type}")
+        print_error(f"No inventory found for {gpu_type}")
         raise typer.Exit(1)
 
     display_offers(all_offers)

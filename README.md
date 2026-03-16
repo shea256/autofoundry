@@ -18,17 +18,19 @@ Autofoundry is a CLI companion to [Karpathy's autoresearch](https://github.com/k
 ## Quickstart
 
 ```bash
-# Install
-uv sync
-
-# First run — configure API keys and SSH key path
-uv run autofoundry run your_experiment.sh
-
-# Subsequent runs use saved config
-uv run autofoundry run your_experiment.sh --num 4 --gpu H100
+git clone https://github.com/autofoundry/autofoundry.git
+cd autofoundry
+uv pip install -e .
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider runpod --auto
 ```
 
 On first run, Autofoundry walks you through configuring provider API keys and your SSH key path. Config is saved to `~/.config/autofoundry/config.toml`.
+
+If you already have your own experiment scripts, you can install just the CLI:
+
+```bash
+pip install autofoundry
+```
 
 ## How It Works
 
@@ -63,8 +65,13 @@ Autofoundry aggregates these across all experiment runs in the final report.
 
 ## Example: autoresearch
 
+Run [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) on any provider:
+
 ```bash
-uv run autofoundry run scripts/run_autoresearch.sh
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider runpod --region US --auto
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider lambdalabs --region US --auto
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider vastai --auto
+autofoundry run scripts/run_autoresearch.sh -g H100 --provider primeintellect --auto
 ```
 
 This provisions an H100, clones autoresearch, trains a 50M parameter language model, and reports metrics including validation BPB, MFU, and throughput.
@@ -75,10 +82,10 @@ Attach persistent storage so dependencies survive across runs:
 
 ```bash
 # First run — creates volume, installs deps to /workspace
-uv run autofoundry run scripts/run_autoresearch.sh --volume my-workspace
+autofoundry run scripts/run_autoresearch.sh --volume my-workspace --provider runpod
 
 # Second run — finds existing volume, skips install
-uv run autofoundry run scripts/run_autoresearch.sh --volume my-workspace
+autofoundry run scripts/run_autoresearch.sh --volume my-workspace --provider runpod
 ```
 
 Supported on RunPod and Lambda Labs.
@@ -88,7 +95,7 @@ Supported on RunPod and Lambda Labs.
 If a session is interrupted, resume it to restart stopped instances and run remaining experiments:
 
 ```bash
-uv run autofoundry run script.sh --resume <session-id>
+autofoundry run scripts/run_autoresearch.sh --resume <session-id>
 ```
 
 ## CLI Reference
@@ -106,7 +113,7 @@ Options:
   --volume, -v        Network volume name (RunPod, Lambda Labs)
 
 autofoundry config          Configure provider API keys
-autofoundry reserves        Browse GPU reserves
+autofoundry inventory       Browse GPU inventory
 autofoundry volumes         List network volumes
 autofoundry status [OP_ID]  Show operation status
 autofoundry results OP_ID   Show experiment metrics
