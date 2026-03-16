@@ -83,6 +83,7 @@ class InstanceConfig(BaseModel):
     ssh_public_key: str = ""
     offer_id: str = ""  # Provider-specific offer/GPU ID for creation
     volume_id: str = ""  # Network volume to attach (provider-specific ID)
+    volume_region: str = ""  # Region/datacenter of the volume (for co-location)
     metadata: dict[str, str] = Field(
         default_factory=dict,
         description="Provider-specific fields passed through from GpuOffer",
