@@ -30,6 +30,8 @@ def _serialize_toml(data: dict) -> str:
             lines.append(f"\n[{key}]")
             for k, v in value.items():
                 lines.append(f'{k} = "{v}"')
+        elif isinstance(value, bool):
+            lines.append(f"{key} = {str(value).lower()}")
         elif isinstance(value, str):
             lines.append(f'{key} = "{value}"')
         else:

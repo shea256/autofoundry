@@ -75,7 +75,9 @@ def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
 
     from collections import defaultdict
 
-    MAX_PER_PROVIDER = 50
+    from rich.prompt import Prompt
+
+    INITIAL_PER_PROVIDER = 10
 
     by_provider: dict[ProviderName, list[GpuOffer]] = defaultdict(list)
     for offer in offers:
@@ -96,48 +98,103 @@ def display_offers(offers: list[GpuOffer]) -> list[GpuOffer]:
 
     displayed: list[GpuOffer] = []
     global_num = 1
+    truncated_providers: dict[str, tuple[ProviderName, int]] = {}
 
     for provider in provider_order:
-        provider_offers = by_provider[provider][:MAX_PER_PROVIDER]
+        all_provider_offers = by_provider[provider]
+        show_offers = all_provider_offers[:INITIAL_PER_PROVIDER]
+        total_count = len(all_provider_offers)
         display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
-        table = make_table(
-            f"{display_name} — {len(provider_offers)} {TERMS['instances'].lower()}",
-            [
-                ("#", "af.muted"),
-                ("GPU", ""),
-                ("VRAM (GB)", ""),
-                ("$/hr", "af.success"),
-                ("DL (Mbps)", "af.muted"),
-                ("Region", "af.muted"),
-                ("Avail", ""),
-            ],
+        hidden = total_count - len(show_offers)
+        title = f"{display_name} — {total_count} {TERMS['instances'].lower()}"
+        if hidden > 0:
+            title += f" (showing {len(show_offers)})"
+
+        displayed, global_num = _render_provider_table(
+            title, show_offers, displayed, global_num
         )
 
-        for offer in provider_offers:
-            dl_speed = f"{offer.inet_down_mbps:.0f}" if offer.inet_down_mbps > 0 else "—"
-            # Show GPU count prefix (e.g. "2x H100 SXM") when > 1,
-            # but skip if already in the name (Lambda Labs includes it)
-            gpu_label = offer.gpu_type
-            if offer.gpu_count > 1 and not gpu_label.startswith(f"{offer.gpu_count}x"):
-                gpu_label = f"{offer.gpu_count}x {gpu_label}"
-            table.add_row(
-                str(global_num),
-                gpu_label,
-                f"{offer.gpu_ram_gb:.0f}",
-                f"${offer.price_per_hour:.2f}",
-                dl_speed,
-                offer.region or "—",
-                str(offer.availability) if offer.availability > 0 else "—",
+        if hidden > 0:
+            short_name = display_name.lower().split()[0]
+            truncated_providers[short_name] = (provider, total_count)
+            console.print(
+                f"  [af.muted]{hidden} more — type [/af.muted]"
+                f"[af.primary]{short_name}[/af.primary]"
+                f"[af.muted] to see all[/af.muted]"
             )
-            displayed.append(offer)
-            global_num += 1
-
-        console.print()
-        console.print(table)
 
     console.print()
+
+    # Let the user expand truncated providers
+    while truncated_providers:
+        choice = Prompt.ask(
+            "  [af.label]Expand a provider (or Enter to continue)[/af.label]",
+            default="",
+        )
+        if not choice.strip():
+            break
+        key = choice.strip().lower()
+        if key not in truncated_providers:
+            console.print(f"  [af.muted]Unknown provider. Options: {', '.join(truncated_providers)}[/af.muted]")
+            continue
+
+        provider, _ = truncated_providers.pop(key)
+        all_provider_offers = by_provider[provider]
+        remaining = all_provider_offers[INITIAL_PER_PROVIDER:]
+        display_name = PROVIDER_DISPLAY.get(provider, provider.value)
+
+        displayed, global_num = _render_provider_table(
+            f"{display_name} — remaining {len(remaining)} {TERMS['instances'].lower()}",
+            remaining, displayed, global_num,
+        )
+        console.print()
+
     return displayed
+
+
+def _render_provider_table(
+    title: str,
+    offers: list[GpuOffer],
+    displayed: list[GpuOffer],
+    global_num: int,
+) -> tuple[list[GpuOffer], int]:
+    """Render a provider table and append offers to the displayed list."""
+    table = make_table(
+        title,
+        [
+            ("#", "af.muted"),
+            ("GPU", ""),
+            ("VRAM (GB)", ""),
+            ("$/hr", "af.success"),
+            ("DL (Mbps)", "af.muted"),
+            ("Region", "af.muted"),
+            ("Avail", ""),
+        ],
+    )
+
+    for offer in offers:
+        dl_speed = f"{offer.inet_down_mbps:.0f}" if offer.inet_down_mbps > 0 else "—"
+        # Show GPU count prefix (e.g. "2x H100 SXM") when > 1,
+        # but skip if already in the name (Lambda Labs includes it)
+        gpu_label = offer.gpu_type
+        if offer.gpu_count > 1 and not gpu_label.startswith(f"{offer.gpu_count}x"):
+            gpu_label = f"{offer.gpu_count}x {gpu_label}"
+        table.add_row(
+            str(global_num),
+            gpu_label,
+            f"{offer.gpu_ram_gb:.0f}",
+            f"${offer.price_per_hour:.2f}",
+            dl_speed,
+            offer.region or "—",
+            str(offer.availability) if offer.availability > 0 else "—",
+        )
+        displayed.append(offer)
+        global_num += 1
+
+    console.print()
+    console.print(table)
+    return displayed, global_num
 
 
 def recommend_plan(

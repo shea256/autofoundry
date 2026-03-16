@@ -35,6 +35,8 @@ curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh
 export PATH="$HOME/.local/bin:$PATH"
 export UV_LINK_MODE=copy
 
-uv sync
-uv run prepare.py
-uv run train.py
+# Skip torch download — the RunPod image already has PyTorch+CUDA pre-installed.
+# This avoids re-downloading the ~2.5GB torch wheel on every run.
+uv sync --system --no-install-package torch
+uv run --system prepare.py
+uv run --system train.py
