@@ -36,12 +36,18 @@ class TestCLIHelp:
 
 
 class TestVolumesCommand:
+    def test_bare_volumes_shows_subcommands(self) -> None:
+        result = runner.invoke(app, ["volumes"])
+        assert result.exit_code == 0
+        assert "list" in result.output
+        assert "create" in result.output
+
     def test_no_volume_providers(self) -> None:
         mock_config = MagicMock()
         mock_config.configured_providers = [ProviderName.PRIMEINTELLECT]
 
         with patch("autofoundry.cli._load_or_setup_config", return_value=mock_config):
-            result = runner.invoke(app, ["volumes"])
+            result = runner.invoke(app, ["volumes", "list"])
 
         assert result.exit_code == 0
         assert "No providers with volume support" in result.output
@@ -67,7 +73,7 @@ class TestVolumesCommand:
             patch("autofoundry.cli._load_or_setup_config", return_value=mock_config),
             patch("autofoundry.providers.get_provider", return_value=mock_provider),
         ):
-            result = runner.invoke(app, ["volumes"])
+            result = runner.invoke(app, ["volumes", "list"])
 
         assert result.exit_code == 0
         assert "my-vol" in result.output
@@ -85,10 +91,52 @@ class TestVolumesCommand:
             patch("autofoundry.cli._load_or_setup_config", return_value=mock_config),
             patch("autofoundry.providers.get_provider", return_value=mock_provider),
         ):
-            result = runner.invoke(app, ["volumes"])
+            result = runner.invoke(app, ["volumes", "list"])
 
         assert result.exit_code == 0
         assert "No volumes found" in result.output
+
+
+class TestVolumesCreateCommand:
+    def test_create_runpod_volume_all_flags(self) -> None:
+        mock_config = MagicMock()
+        mock_config.configured_providers = [ProviderName.RUNPOD]
+        mock_config.api_keys = {ProviderName.RUNPOD: "test-key"}
+
+        mock_provider = MagicMock()
+        mock_provider.create_volume.return_value = VolumeInfo(
+            provider=ProviderName.RUNPOD,
+            volume_id="vol-new123",
+            name="test-vol",
+            size_gb=50,
+            region="US-TX-3",
+            mount_path="/workspace",
+        )
+
+        with (
+            patch("autofoundry.cli._load_or_setup_config", return_value=mock_config),
+            patch("autofoundry.providers.get_provider", return_value=mock_provider),
+        ):
+            result = runner.invoke(
+                app,
+                ["volumes", "create", "-n", "test-vol", "-p", "runpod", "-s", "50", "-r", "US-TX-3"],
+                input="y\n",
+            )
+
+        assert result.exit_code == 0
+        assert "Volume created" in result.output
+        assert "test-vol" in result.output
+        mock_provider.create_volume.assert_called_once_with("test-vol", 50, "US-TX-3")
+
+    def test_create_no_providers(self) -> None:
+        mock_config = MagicMock()
+        mock_config.configured_providers = [ProviderName.PRIMEINTELLECT]
+
+        with patch("autofoundry.cli._load_or_setup_config", return_value=mock_config):
+            result = runner.invoke(app, ["volumes", "create", "-n", "test-vol"])
+
+        assert result.exit_code == 0
+        assert "No providers with volume support" in result.output
 
 
 class TestResolveVolume:

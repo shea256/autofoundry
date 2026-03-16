@@ -43,7 +43,7 @@ def _default(
         console.print("  [af.muted]COMMANDS:[/af.muted]")
         console.print("    [af.secondary]config[/af.secondary]    Configure API keys, SSH key, and default GPU type")
         console.print("    [af.secondary]inventory[/af.secondary] Browse GPU inventory across supply lines")
-        console.print("    [af.secondary]volumes[/af.secondary]   List network volumes across providers")
+        console.print("    [af.secondary]volumes[/af.secondary]   Manage network volumes (list, create)")
         console.print("    [af.secondary]run[/af.secondary]       Launch GPU experiment orchestration engine")
         console.print("    [af.secondary]status[/af.secondary]    Show status of operations and instances")
         console.print("    [af.secondary]results[/af.secondary]   View experiment results and metrics")
@@ -557,25 +557,59 @@ def run(
     store.close()
 
 
-@app.command(context_settings={"help_option_names": []})
-def volumes(
+volumes_app = typer.Typer(
+    add_completion=False,
+    pretty_exceptions_enable=False,
+    invoke_without_command=True,
+)
+app.add_typer(volumes_app, name="volumes")
+
+
+def _get_volume_providers(config: Config) -> list:
+    """Return configured providers that support volumes."""
+    from autofoundry.models import ProviderName
+
+    VOLUME_PROVIDERS = {ProviderName.RUNPOD, ProviderName.LAMBDALABS}
+    return [p for p in config.configured_providers if p in VOLUME_PROVIDERS]
+
+
+@volumes_app.callback(context_settings={"help_option_names": []})
+def _volumes_default(
+    ctx: typer.Context,
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """Manage network volumes across providers."""
+    if help_ or ctx.invoked_subcommand is None:
+        print_banner(version=__version__)
+        console.print()
+        console.print("  [af.primary]autofoundry volumes[/af.primary] — [af.muted]Manage network volumes[/af.muted]")
+        console.print()
+        console.print("  [af.muted]COMMANDS:[/af.muted]")
+        console.print("    [af.secondary]list[/af.secondary]     List network volumes across providers")
+        console.print("    [af.secondary]create[/af.secondary]   Create a new network volume")
+        console.print()
+        if help_:
+            raise typer.Exit()
+
+
+@volumes_app.command("list", context_settings={"help_option_names": []})
+def volumes_list(
     help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
 ) -> None:
     """List network volumes across all configured providers."""
     if help_:
-        _print_command_help("autofoundry volumes", "List network volumes across providers", [
+        _print_command_help("autofoundry volumes list", "List network volumes across providers", [
             ("--help, -h", "Show this help"),
         ])
         raise typer.Exit()
-    from autofoundry.models import ProviderName
     from autofoundry.providers import get_provider
     from autofoundry.theme import make_table
 
     print_banner(version=__version__)
+    console.print()
     config = _load_or_setup_config()
 
-    VOLUME_PROVIDERS = {ProviderName.RUNPOD, ProviderName.LAMBDALABS}
-    eligible = [p for p in config.configured_providers if p in VOLUME_PROVIDERS]
+    eligible = _get_volume_providers(config)
 
     if not eligible:
         console.print("  [af.muted]No providers with volume support configured.[/af.muted]")
@@ -594,6 +628,7 @@ def volumes(
 
     if not all_volumes:
         console.print("  [af.muted]No volumes found.[/af.muted]")
+        console.print()
         return
 
     table = make_table("NETWORK VOLUMES", [
@@ -618,6 +653,112 @@ def volumes(
         )
 
     console.print(table)
+    console.print()
+
+
+@volumes_app.command("create", context_settings={"help_option_names": []})
+def volumes_create(
+    name: str = typer.Option(None, "--name", "-n", help="Volume name"),
+    provider_opt: str = typer.Option(None, "--provider", "-p", help="Provider (runpod, lambdalabs)"),
+    size: int = typer.Option(None, "--size", "-s", help="Size in GB (RunPod only)"),
+    region: str = typer.Option(None, "--region", "-r", help="Region / data center ID"),
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """Create a new network volume."""
+    if help_:
+        _print_command_help("autofoundry volumes create", "Create a new network volume", [
+            ("--name, -n TEXT", "Volume name"),
+            ("--provider, -p TEXT", "Provider (runpod, lambdalabs)"),
+            ("--size, -s INT", "Size in GB (RunPod only, default: 100)"),
+            ("--region, -r TEXT", "Region / data center ID"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    from rich.prompt import Confirm as RichConfirm
+
+    from autofoundry.models import ProviderName
+    from autofoundry.providers import get_provider
+
+    print_banner(version=__version__)
+    config = _load_or_setup_config()
+
+    eligible = _get_volume_providers(config)
+
+    if not eligible:
+        console.print("  [af.muted]No providers with volume support configured.[/af.muted]")
+        console.print("  [af.muted]Supported: RunPod, Lambda Labs[/af.muted]")
+        return
+
+    # Resolve provider
+    if provider_opt:
+        try:
+            provider_name = ProviderName(provider_opt)
+        except ValueError:
+            print_error(f"Unknown provider: {provider_opt}")
+            print_error(f"Available: {', '.join(p.value for p in eligible)}")
+            return
+        if provider_name not in eligible:
+            print_error(f"{provider_opt} is not configured or doesn't support volumes.")
+            return
+    elif len(eligible) == 1:
+        provider_name = eligible[0]
+    else:
+        choice = Prompt.ask(
+            "  [af.label]Provider[/af.label]",
+            choices=[p.value for p in eligible],
+        )
+        provider_name = ProviderName(choice)
+
+    from autofoundry.config import PROVIDER_DISPLAY
+
+    print_status("Provider", PROVIDER_DISPLAY.get(provider_name, provider_name.value))
+
+    # Resolve name
+    if not name:
+        name = Prompt.ask("  [af.label]Volume name[/af.label]")
+
+    # Resolve size & region per provider
+    if provider_name == ProviderName.RUNPOD:
+        if size is None:
+            size = IntPrompt.ask("  [af.label]Volume size (GB)[/af.label]", default=100)
+        if not region:
+            region = Prompt.ask("  [af.label]Data center ID[/af.label]", default="US-TX-3")
+
+        if not RichConfirm.ask(
+            f"  [af.label]Create {size}GB volume '{name}' in {region}?[/af.label]",
+            default=True,
+        ):
+            return
+
+        provider = get_provider(provider_name, config.api_keys[provider_name])
+        vol = provider.create_volume(name, size, region)
+
+    elif provider_name == ProviderName.LAMBDALABS:
+        if not region:
+            region = Prompt.ask("  [af.label]Region[/af.label]", default="us-east-1")
+
+        if not RichConfirm.ask(
+            f"  [af.label]Create volume '{name}' in {region}?[/af.label]",
+            default=True,
+        ):
+            return
+
+        provider = get_provider(provider_name, config.api_keys[provider_name])
+        vol = provider.create_volume(name, region)
+
+    else:
+        print_error(f"Volume creation not supported for {provider_name.value}")
+        return
+
+    console.print()
+    print_success(f"Volume created: {vol.name}")
+    print_status("ID", vol.volume_id)
+    print_status("Region", vol.region)
+    if vol.size_gb:
+        print_status("Size", f"{vol.size_gb}GB")
+    print_status("Mount path", vol.mount_path)
+    console.print()
+    console.print(f"  [af.muted]Use with:[/af.muted] [af.primary]autofoundry run <script> --volume {vol.name}[/af.primary]")
     console.print()
 
 
