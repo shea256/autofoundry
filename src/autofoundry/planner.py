@@ -77,11 +77,12 @@ def query_all_offers(
     return all_offers
 
 
-def display_offers(offers: list[GpuOffer]) -> tuple[list[GpuOffer], dict]:
+def display_offers(offers: list[GpuOffer], *, truncate: bool = True) -> tuple[list[GpuOffer], dict]:
     """Display GPU offers grouped by provider.
 
     Returns (displayed_offers, truncated_providers) where truncated_providers
     maps short names to (ProviderName, by_provider_dict) for lazy expansion.
+    When truncate=False, all offers are shown and truncated_providers is empty.
     """
     if not offers:
         print_error(f"No GPU {TERMS['instances'].lower()} found matching your criteria.")
@@ -116,8 +117,11 @@ def display_offers(offers: list[GpuOffer]) -> tuple[list[GpuOffer], dict]:
 
     for provider in provider_order:
         all_provider_offers = by_provider[provider]
-        cap = INITIAL_PER_PROVIDER.get(provider, DEFAULT_PER_PROVIDER)
-        show_offers = all_provider_offers[:cap]
+        if truncate:
+            cap = INITIAL_PER_PROVIDER.get(provider, DEFAULT_PER_PROVIDER)
+            show_offers = all_provider_offers[:cap]
+        else:
+            show_offers = all_provider_offers
         total_count = len(all_provider_offers)
         display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
