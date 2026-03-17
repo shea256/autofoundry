@@ -3,7 +3,7 @@
 Run any ML experiment script across GPUs on multiple cloud providers with a single command.
 
 <p align="center">
-  <img src="assets/cli-preview.png" alt="Autofoundry CLI" width="620">
+  <img src="assets/autofoundry-demo.gif" alt="Autofoundry CLI demo" width="620">
 </p>
 
 Autofoundry is a CLI companion to [Karpathy's autoresearch](https://github.com/karpathy/autoresearch). Point it at a shell script, pick your GPU configuration, and it handles the rest: provisioning instances, distributing experiment runs, streaming results live, and producing a final metrics report.
