@@ -636,6 +636,7 @@ def run(
     from autofoundry.provisioner import (
         provision_instances,
         register_cleanup_handler,
+        stop_instances,
         teardown_instances,
     )
 
@@ -657,14 +658,18 @@ def run(
                 f"{len(stored)} instance(s) already created[/af.alert]"
             )
             choice = Prompt.ask(
-                "\n  [af.muted]What to do with instances?\n"
+                f"\n  [af.muted]What to do with {term('instances', len(stored)).lower()}?\n"
+                "  stop = release GPU, keep disk (fast restart later)\n"
                 "  terminate = delete everything\n"
                 "  keep = leave running[/af.muted]\n"
                 "  [af.label]Choice[/af.label]",
-                choices=["terminate", "keep"],
-                default="terminate",
+                choices=["stop", "terminate", "keep"],
+                default="stop",
             )
-            if choice == "terminate":
+            if choice == "stop":
+                stop_instances(config, stored)
+                store.update_session_status(SessionStatus.PAUSED)
+            elif choice == "terminate":
                 teardown_instances(config, stored)
                 store.update_session_status(SessionStatus.FAILED)
             else:

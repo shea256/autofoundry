@@ -532,11 +532,32 @@ def teardown_instances(
 def register_cleanup_handler(
     config: Config, instances: list[InstanceInfo]
 ) -> None:
-    """Register SIGINT/SIGTERM handler to clean up instances on exit."""
+    """Register SIGINT/SIGTERM handler to prompt user for instance action."""
+    from rich.prompt import Prompt
+
     def handler(signum: int, frame: object) -> None:
         console.print()
-        console.print("  [af.alert]INTERRUPT — initiating cleanup...[/af.alert]")
-        teardown_instances(config, instances)
+        console.print(
+            f"  [af.alert]INTERRUPT — "
+            f"{len(instances)} instance(s) running[/af.alert]"
+        )
+        choice = Prompt.ask(
+            f"\n  [af.muted]What to do with {term('instances', len(instances)).lower()}?\n"
+            "  stop = release GPU, keep disk (fast restart later)\n"
+            "  terminate = delete everything\n"
+            "  keep = leave running[/af.muted]\n"
+            "  [af.label]Choice[/af.label]",
+            choices=["stop", "terminate", "keep"],
+            default="stop",
+        )
+        if choice == "stop":
+            stop_instances(config, instances)
+        elif choice == "terminate":
+            teardown_instances(config, instances)
+        else:
+            console.print(
+                "  [af.muted]Instances kept. Use 'autofoundry teardown' to clean up.[/af.muted]"
+            )
         sys.exit(1)
 
     signal.signal(signal.SIGINT, handler)
