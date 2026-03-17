@@ -23,10 +23,11 @@ from autofoundry.theme import (
 def _query_provider_offers(
     provider_name: ProviderName, api_key: str, gpu_type: str,
     datacenter_id: str | None = None,
+    min_bandwidth_mbps: float = 5000.0,
 ) -> tuple[ProviderName, list[GpuOffer], str | None]:
     """Query a single provider for GPU offers. Returns (provider, offers, error)."""
     try:
-        provider = get_provider(provider_name, api_key)
+        provider = get_provider(provider_name, api_key, min_bandwidth_mbps=min_bandwidth_mbps)
         # Only RunPod supports datacenter_id filtering
         if datacenter_id and provider_name == ProviderName.RUNPOD:
             offers = provider.list_gpu_offers(gpu_type, datacenter_id=datacenter_id)
@@ -47,7 +48,7 @@ def query_all_offers(
         futures = {
             pool.submit(
                 _query_provider_offers, provider, config.api_keys[provider], gpu_type,
-                datacenter_id,
+                datacenter_id, config.min_bandwidth_mbps,
             ): provider
             for provider in config.configured_providers
         }
@@ -88,7 +89,10 @@ def display_offers(offers: list[GpuOffer]) -> tuple[list[GpuOffer], dict]:
 
     from collections import defaultdict
 
-    INITIAL_PER_PROVIDER = 10
+    INITIAL_PER_PROVIDER: dict[ProviderName, int] = {
+        ProviderName.VASTAI: 6,
+    }
+    DEFAULT_PER_PROVIDER = 10
 
     by_provider: dict[ProviderName, list[GpuOffer]] = defaultdict(list)
     for offer in offers:
@@ -112,7 +116,8 @@ def display_offers(offers: list[GpuOffer]) -> tuple[list[GpuOffer], dict]:
 
     for provider in provider_order:
         all_provider_offers = by_provider[provider]
-        show_offers = all_provider_offers[:INITIAL_PER_PROVIDER]
+        cap = INITIAL_PER_PROVIDER.get(provider, DEFAULT_PER_PROVIDER)
+        show_offers = all_provider_offers[:cap]
         total_count = len(all_provider_offers)
         display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
@@ -142,11 +147,12 @@ def expand_provider(
     displayed: list[GpuOffer],
 ) -> list[GpuOffer]:
     """Expand a truncated provider's remaining offers. Mutates truncated_providers and displayed."""
-    INITIAL_PER_PROVIDER = 10
+    _CAPS: dict[ProviderName, int] = {ProviderName.VASTAI: 6}
 
     provider, by_provider = truncated_providers.pop(key)
     all_provider_offers = by_provider[provider]
-    remaining = all_provider_offers[INITIAL_PER_PROVIDER:]
+    cap = _CAPS.get(provider, 10)
+    remaining = all_provider_offers[cap:]
     display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
     global_num = len(displayed) + 1

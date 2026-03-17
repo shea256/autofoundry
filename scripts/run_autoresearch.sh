@@ -14,7 +14,6 @@ else
 fi
 
 # Ensure python3-dev is installed (needed for Triton/torch.compile on bare images).
-# Skip apt traffic when it is already present.
 if dpkg -s python3-dev >/dev/null 2>&1; then
     echo "python3-dev already installed; skipping apt step."
 else
@@ -45,14 +44,16 @@ else
     git clone https://github.com/karpathy/autoresearch.git && cd autoresearch
 fi
 
+PYTHON_BIN="${AUTORESEARCH_PYTHON:-$(command -v python3 || command -v python3.10)}"
+if [ -z "$PYTHON_BIN" ]; then
+    echo "No Python interpreter found (python3/python3.10)." >&2
+    exit 1
+fi
+
+# Install uv (needed for both fast and full paths).
 UV="${UV_BIN:-$HOME/.local/bin/uv}"
 UV_REQUIRED_VERSION="0.10.10"
 UV_FORCE_PINNED_INSTALL=0
-PYTHON_BIN="${AUTORESEARCH_PYTHON:-$(command -v python3.10 || command -v python3)}"
-if [ -z "$PYTHON_BIN" ]; then
-    echo "No Python interpreter found (python3.10/python3)." >&2
-    exit 1
-fi
 if [ -x "$UV" ]; then
     UV_CURRENT_VERSION="$($UV --version | awk '{print $2}')"
     if [ "$UV_CURRENT_VERSION" != "$UV_REQUIRED_VERSION" ]; then
@@ -75,15 +76,56 @@ if [ ! -x "$UV" ] || [ "$UV_FORCE_PINNED_INSTALL" = "1" ]; then
 fi
 export UV_LINK_MODE=copy
 
-# Install project deps into system Python. We use --no-build-isolation and
-# --no-build to skip building the project itself (autoresearch isn't a proper
-# installable package — it's just loose scripts). Torch is already pre-installed
-# on the provider image, so uv's resolver skips it.
-$UV pip install --system --python "$PYTHON_BIN" --no-deps --no-build-isolation . 2>/dev/null || true
-# Now install the actual dependencies from pyproject.toml using uv's
-# requirements extraction.
-$PYTHON_BIN - <<'EXTRACT_DEPS' > /tmp/af_requirements.txt
+# Detect pre-built autoresearch image (torch + CUDA pre-installed).
+PREBUILT_IMAGE="${AUTOFOUNDRY_IMAGE:-}"
+IS_PREBUILT=0
+case "$PREBUILT_IMAGE" in
+    *autoresearch*) IS_PREBUILT=1 ;;
+esac
+
+# Use persistent path for venv so it survives stop/start cycles.
+# /workspace persists on RunPod/Vast.ai; fall back to /tmp otherwise.
+if [ -d /workspace ]; then
+    VENV_DIR="/workspace/.autoresearch_venv"
+else
+    VENV_DIR="$HOME/.autoresearch_venv"
+fi
+
+# Fast resume: if venv exists and torch is importable, skip setup entirely.
+if [ -x "$VENV_DIR/bin/python" ] && "$VENV_DIR/bin/python" -c "import torch" 2>/dev/null; then
+    echo "Existing venv found with torch — skipping setup."
+    PYTHON_BIN="$VENV_DIR/bin/python"
+elif [ "$IS_PREBUILT" = "1" ]; then
+    # Pre-built image: inherit system torch via --system-site-packages.
+    echo "Pre-built image detected — installing lightweight deps only."
+    $PYTHON_BIN -m venv --system-site-packages "$VENV_DIR"
+    PYTHON_BIN="$VENV_DIR/bin/python"
+    $UV pip install --python "$PYTHON_BIN" --no-deps --no-build-isolation . 2>/dev/null || true
+    $PYTHON_BIN - <<'EXTRACT_LIGHT' > /tmp/af_requirements.txt
 import re
+skip = re.compile(r"^(torch|nvidia|triton)", re.IGNORECASE)
+in_deps = False
+for line in open("pyproject.toml"):
+    s = line.strip()
+    if not in_deps:
+        if s.startswith("dependencies") and s.endswith("["):
+            in_deps = True
+        continue
+    if s.startswith("]"):
+        break
+    s = s.strip().rstrip(",").strip().strip('"').strip("'")
+    if s and not skip.match(s):
+        print(s)
+EXTRACT_LIGHT
+    $UV pip install --python "$PYTHON_BIN" -r /tmp/af_requirements.txt
+    rm -f /tmp/af_requirements.txt
+else
+    # Fresh install: isolated venv with all deps including torch.
+    echo "Installing all dependencies (including torch)..."
+    $UV venv --python "$PYTHON_BIN" "$VENV_DIR"
+    PYTHON_BIN="$VENV_DIR/bin/python"
+    $UV pip install --python "$PYTHON_BIN" --no-deps --no-build-isolation . 2>/dev/null || true
+    $PYTHON_BIN - <<'EXTRACT_DEPS' > /tmp/af_requirements.txt
 in_deps = False
 for line in open("pyproject.toml"):
     s = line.strip()
@@ -97,8 +139,9 @@ for line in open("pyproject.toml"):
     if s:
         print(s)
 EXTRACT_DEPS
-$UV pip install --system --python "$PYTHON_BIN" -r /tmp/af_requirements.txt
-rm -f /tmp/af_requirements.txt
+    $UV pip install --python "$PYTHON_BIN" -r /tmp/af_requirements.txt
+    rm -f /tmp/af_requirements.txt
+fi
 
 $PYTHON_BIN prepare.py
 $PYTHON_BIN train.py

@@ -24,7 +24,7 @@ uv pip install -e .
 autofoundry run scripts/run_autoresearch.sh -g H100 --provider runpod --auto
 ```
 
-On first run, Autofoundry walks you through configuring provider API keys and your SSH key path. Config is saved to `~/.config/autofoundry/config.toml`.
+On first run, Autofoundry walks you through configuring provider API keys, SSH key path, default GPU type, minimum download bandwidth (default 5000 Mbps — filters out slow Vast.ai hosts), and HuggingFace token. Config is saved to `~/.config/autofoundry/config.toml`.
 
 If you already have your own experiment scripts, you can install just the CLI:
 
@@ -98,6 +98,23 @@ If a session is interrupted, resume it to restart stopped instances and run rema
 autofoundry run scripts/run_autoresearch.sh --resume <session-id>
 ```
 
+On resume, the script detects the existing venv (at `/workspace/.autoresearch_venv`) and skips all setup — no image pull, no pip install. Setup takes seconds instead of minutes.
+
+## Custom Images
+
+Override the default provider image with `--image`:
+
+```bash
+# Use a pre-built autoresearch image (skips torch download)
+autofoundry run scripts/run_autoresearch.sh --image runpod/autoresearch:1.0.2-cuda1281-ubuntu2204
+
+# Or declare per-provider images in your script header:
+# autofoundry:image:runpod=runpod/autoresearch:1.0.2-cuda1281-ubuntu2204
+# autofoundry:image:vastai=shea256/autoresearch:latest
+```
+
+When the image name contains "autoresearch", the script inherits system torch and only installs lightweight dependencies.
+
 ## CLI Reference
 
 ```
@@ -113,6 +130,7 @@ Options:
   --region            Region filter (e.g. US, EU)
   --resume, -r        Resume a previous session
   --volume, -v        Network volume name (RunPod, Lambda Labs)
+  --image, -i         Docker image override (e.g. runpod/autoresearch:latest)
   --auto              Auto-select cheapest offer, no prompts
 
 autofoundry config                          Configure provider API keys

@@ -11,9 +11,9 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 
 - **CLI**: `src/autofoundry/cli.py` — `run`, `config`, `inventory`, `volumes` (list, create), `status`, `results`, `teardown` commands via Typer
 - **Models**: `src/autofoundry/models.py` — GpuOffer, InstanceConfig, InstanceInfo, VolumeInfo, ProvisioningPlan
-- **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml` (custom serializer outputs lowercase `true`/`false` for booleans)
+- **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml` (custom serializer outputs lowercase `true`/`false` for booleans); includes `min_bandwidth_mbps` (default 5000) and `huggingface_token`; all values support env var fallbacks (config.toml takes precedence)
 - **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect,lambdalabs}.py`
-- **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("operations", "units", "supply lines", "reserves", "sync tests")
+- **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("operations", "units", "supply lines", "reserves", "sync test"); `term()` helper selects singular/plural forms based on count
 - **State**: `src/autofoundry/state.py` — SQLite-backed session persistence (WAL mode)
 
 ## Run Modes
@@ -41,6 +41,7 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - Auth: `Authorization: Bearer` header on httpx client for most endpoints
 - `create_instance` PUT passes `api_key` as query param (not header)
 - GPU name filtering must be client-side (substring match via `_find_gpu_variants`), not exact match
+- **Bandwidth filtering**: `inet_down` field in query filters by min download speed (default 5000 Mbps, configurable via `min_bandwidth_mbps` in config)
 - **SSH connectivity**: Use `ssh_host` and `ssh_port` fields from instance details (not `public_ipaddr`)
 - SSH key registration: POST to `/ssh/` (not PUT), no `api_key` query param needed (uses Bearer header)
 - Provider image: `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`
@@ -64,6 +65,13 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - Attach via `file_system_names` in launch payload, mounts at `/lambda/nfs/persistent-storage`
 - Region handling: each region is separate offer with metadata
 
+## Environment Forwarding
+- `python-dotenv` loads `.env` on CLI startup (`cli.py`)
+- Config precedence: config.toml > env vars/.env > defaults
+- Env var fallbacks: `RUNPOD_API_KEY`, `VASTAI_API_KEY`, `PRIMEINTELLECT_API_KEY`, `LAMBDALABS_API_KEY`, `HUGGINGFACE_TOKEN`, `AUTOFOUNDRY_SSH_KEY_PATH`, `AUTOFOUNDRY_GPU_TYPE`, `AUTOFOUNDRY_MIN_BANDWIDTH_MBPS`
+- `HUGGINGFACE_TOKEN` from config is forwarded to remote instances as `HF_TOKEN`
+- `AUTOFOUNDRY_IMAGE` is forwarded when `--image` is specified, so scripts can branch on which image is running
+
 ## SSH Execution
 - `executor.py` uses subprocess SSH/SCP (not asyncssh, despite the dependency)
 - `BatchMode=yes` + `PasswordAuthentication=no` prevent password prompt hangs
@@ -78,11 +86,19 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - Resume support: `--resume` flag restarts stopped instances and runs pending experiments
 
 ## Inventory UI
-- `planner.py` displays up to 10 GPU offers per provider initially, with interactive expansion to view all
+- `planner.py` displays up to 10 GPU offers per provider initially (6 for Vast.ai), with interactive expansion to view all
 
 ## Scripts
-- `scripts/run_autoresearch.sh` — clone, install deps, run. Works from scratch or with volumes (pulls on re-run).
-- Uses `--system` flag and `--no-install-package torch` to skip redundant downloads on images with pre-installed torch
+- `scripts/run_autoresearch.sh` — clone, install deps via uv into a venv, run. Works from scratch or with volumes (pulls on re-run).
+- Scripts can declare `# autofoundry:image:<provider>=<image>` in the header (first 20 lines) to override the default provider image
+- CLI `--image` flag overrides all provider images (takes precedence over script directives and defaults)
+- `run_autoresearch.sh` uses the default provider image (lightweight pytorch base); creates a venv and installs torch 2.9.1 + deps via uv at runtime
+- Venv stored persistently at `/workspace/.autoresearch_venv` (survives stop/start cycles for fast resume)
+- Three setup paths based on `AUTOFOUNDRY_IMAGE` env var:
+  1. **Resume** — existing venv with torch found → skips all setup (seconds)
+  2. **Pre-built image** — `AUTOFOUNDRY_IMAGE` contains "autoresearch" → inherits system torch, installs lightweight deps only
+  3. **Fresh install** — isolated venv, installs everything including torch (~3-5 min)
+- Venv approach avoids "externally managed" Python errors on Ubuntu 24.04+ images where system Python is PEP 668-protected
 - Script outputs `---` delimiter followed by `key: value` metrics, parsed by `executor.parse_metrics()`
 
 ## Status

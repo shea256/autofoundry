@@ -74,6 +74,9 @@ def _remote_env_prefix() -> str:
     hf_token = os.environ.get("HUGGINGFACE_TOKEN")
     if hf_token:
         env_vars.append(f"HF_TOKEN={hf_token}")
+    af_image = os.environ.get("AUTOFOUNDRY_IMAGE")
+    if af_image:
+        env_vars.append(f"AUTOFOUNDRY_IMAGE={af_image}")
     return " ".join(env_vars) + " "
 
 

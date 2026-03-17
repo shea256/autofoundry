@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
 
 from autofoundry.config import PROVIDER_DISPLAY, Config
 from autofoundry.models import (
@@ -36,6 +38,29 @@ PROVIDER_IMAGES: dict[ProviderName, str] = {
     ProviderName.PRIMEINTELLECT: "cuda_12_4_pytorch_2_4",
     ProviderName.LAMBDALABS: "",  # Lambda uses pre-configured Ubuntu images, not Docker
 }
+
+
+_SCRIPT_IMAGE_RE = re.compile(r"^#\s*autofoundry:image:(\w+)=(.+)$")
+
+
+def parse_script_images(script_path: str) -> dict[ProviderName, str]:
+    """Parse ``# autofoundry:image:<provider>=<image>`` directives from a script header.
+
+    Only the first 20 lines are scanned. Returns a mapping of provider → image.
+    """
+    overrides: dict[ProviderName, str] = {}
+    try:
+        lines = Path(script_path).read_text().splitlines()[:20]
+    except OSError:
+        return overrides
+    provider_lookup = {p.value: p for p in ProviderName}
+    for line in lines:
+        m = _SCRIPT_IMAGE_RE.match(line.strip())
+        if m:
+            provider_key, image = m.group(1), m.group(2).strip()
+            if provider_key in provider_lookup:
+                overrides[provider_lookup[provider_key]] = image
+    return overrides
 
 
 MAX_OFFER_RETRIES = 5
@@ -211,6 +236,8 @@ def provision_instances(
     gpu_type_filter: str | None = None,
     volume_id: str = "",
     volume_region: str = "",
+    script_path: str = "",
+    image_override: str | None = None,
 ) -> list[InstanceInfo]:
     """Provision all instances in the plan in parallel.
 
@@ -233,9 +260,14 @@ def provision_instances(
     claimed_lock = threading.Lock()
     cancel_event = threading.Event()
 
+    script_images = parse_script_images(script_path) if script_path else {}
+
     for offer, count in plan.offers:
-        provider = get_provider(offer.provider, config.api_keys[offer.provider])
-        image = PROVIDER_IMAGES.get(
+        provider = get_provider(
+            offer.provider, config.api_keys[offer.provider],
+            min_bandwidth_mbps=config.min_bandwidth_mbps,
+        )
+        image = image_override or script_images.get(offer.provider) or PROVIDER_IMAGES.get(
             offer.provider,
             "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel",
         )

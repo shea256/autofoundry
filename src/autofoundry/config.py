@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
@@ -19,6 +20,14 @@ PROVIDER_DISPLAY = {
     ProviderName.VASTAI: "Vast.ai",
     ProviderName.PRIMEINTELLECT: "PRIME Intellect",
     ProviderName.LAMBDALABS: "Lambda Labs",
+}
+
+# Env var names for provider API keys (fallback when not in config.toml)
+PROVIDER_ENV_VARS = {
+    ProviderName.RUNPOD: "RUNPOD_API_KEY",
+    ProviderName.VASTAI: "VASTAI_API_KEY",
+    ProviderName.PRIMEINTELLECT: "PRIMEINTELLECT_API_KEY",
+    ProviderName.LAMBDALABS: "LAMBDALABS_API_KEY",
 }
 
 
@@ -46,6 +55,8 @@ class Config:
         self.api_keys: dict[ProviderName, str] = {}
         self.ssh_key_path: str = str(Path.home() / ".ssh" / "id_rsa")
         self.default_gpu_type: str = "H100"
+        self.min_bandwidth_mbps: float = 5000.0
+        self.huggingface_token: str = ""
         self.last_script: str = ""
         self._next_operation: int = 1
 
@@ -67,6 +78,8 @@ class Config:
         data: dict = {
             "ssh_key_path": self.ssh_key_path,
             "default_gpu_type": self.default_gpu_type,
+            "min_bandwidth_mbps": self.min_bandwidth_mbps,
+            "huggingface_token": self.huggingface_token,
             "last_script": self.last_script,
             "next_operation": self._next_operation,
             "api_keys": {p.value: key for p, key in self.api_keys.items()},
@@ -75,9 +88,12 @@ class Config:
 
     @classmethod
     def load(cls) -> Config | None:
-        """Load config from disk. Returns None if no config file exists."""
+        """Load config from disk. Returns None if no config file exists.
+
+        Precedence: config.toml > env vars/.env > defaults.
+        """
         if not CONFIG_FILE.exists():
-            return None
+            return cls._from_env()
 
         config = cls()
         with open(CONFIG_FILE, "rb") as f:
@@ -85,6 +101,8 @@ class Config:
 
         config.ssh_key_path = data.get("ssh_key_path", config.ssh_key_path)
         config.default_gpu_type = data.get("default_gpu_type", config.default_gpu_type)
+        config.min_bandwidth_mbps = float(data.get("min_bandwidth_mbps", config.min_bandwidth_mbps))
+        config.huggingface_token = data.get("huggingface_token", "")
         config.last_script = data.get("last_script", "")
         config._next_operation = data.get("next_operation", 1)
 
@@ -94,7 +112,42 @@ class Config:
             if key:
                 config.api_keys[provider] = key
 
+        # Fill gaps from env vars (config.toml values take precedence)
+        config._apply_env_fallbacks()
+
         return config
+
+    @classmethod
+    def _from_env(cls) -> Config | None:
+        """Try to build a config purely from env vars. Returns None if no keys found."""
+        config = cls()
+        config._apply_env_fallbacks()
+        if not config.configured_providers:
+            return None
+        return config
+
+    def _apply_env_fallbacks(self) -> None:
+        """Fill missing config values from environment variables."""
+        for provider, env_var in PROVIDER_ENV_VARS.items():
+            if provider not in self.api_keys:
+                key = os.environ.get(env_var, "")
+                if key:
+                    self.api_keys[provider] = key
+
+        if not self.huggingface_token:
+            self.huggingface_token = os.environ.get("HUGGINGFACE_TOKEN", "")
+
+        env_ssh = os.environ.get("AUTOFOUNDRY_SSH_KEY_PATH", "")
+        if env_ssh:
+            self.ssh_key_path = env_ssh
+
+        env_gpu = os.environ.get("AUTOFOUNDRY_GPU_TYPE", "")
+        if env_gpu:
+            self.default_gpu_type = env_gpu
+
+        env_bw = os.environ.get("AUTOFOUNDRY_MIN_BANDWIDTH_MBPS", "")
+        if env_bw:
+            self.min_bandwidth_mbps = float(env_bw)
 
 
 def first_run_setup(existing: Config | None = None) -> Config:
@@ -147,6 +200,23 @@ def first_run_setup(existing: Config | None = None) -> Config:
         "  [af.label]Default GPU type[/af.label]",
         default=config.default_gpu_type,
     )
+
+    # Minimum bandwidth
+    bw = Prompt.ask(
+        "  [af.label]Min download bandwidth (Mbps)[/af.label]",
+        default=str(int(config.min_bandwidth_mbps)),
+    )
+    config.min_bandwidth_mbps = float(bw)
+
+    # HuggingFace token (optional)
+    console.print()
+    hf_default = config.huggingface_token or ""
+    hf_hint = " [af.muted](configured ✓)[/af.muted]" if hf_default else " [af.muted](optional)[/af.muted]"
+    hf_token = Prompt.ask(
+        f"  [af.label]HuggingFace token[/af.label]{hf_hint}",
+        default=hf_default,
+    )
+    config.huggingface_token = hf_token.strip()
 
     config.save()
     console.print()

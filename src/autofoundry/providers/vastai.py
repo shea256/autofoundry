@@ -22,10 +22,11 @@ class VastAIProvider:
     name = "vastai"
     BASE_URL = "https://console.vast.ai/api/v0"
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, min_bandwidth_mbps: float = 5000.0) -> None:
         if not api_key:
             raise ValueError("Vast.ai API key is required")
         self._api_key = api_key
+        self._min_bandwidth_mbps = min_bandwidth_mbps
         self._ssh_key_synced = False
         self._client = httpx.Client(
             base_url=self.BASE_URL,
@@ -107,6 +108,8 @@ class VastAIProvider:
             "limit": 100,
             "allocated_storage": 5.0,
         }
+        if self._min_bandwidth_mbps > 0:
+            query["inet_down"] = {"gte": self._min_bandwidth_mbps}
 
         # Server-side GPU name filter using the "in" operator
         if gpu_type:

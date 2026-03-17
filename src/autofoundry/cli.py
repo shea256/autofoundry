@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import click
@@ -419,6 +420,7 @@ def run(
     volume: str = typer.Option(None, "--volume", "-v", help="Network volume name (creates if needed)"),
     provider: str = typer.Option(None, "--provider", "-p", help="Provider filter (e.g. primeintellect, vastai)"),
     region: str = typer.Option(None, "--region", help="Region filter (e.g. US, EU)"),
+    image: str = typer.Option(None, "--image", "-i", help="Docker image override (e.g. runpod/autoresearch:latest)"),
     auto: bool = typer.Option(False, "--auto", help="Auto-select cheapest offer, no prompts"),
 ) -> None:
     """Launch autofoundry — GPU experiment orchestration engine."""
@@ -431,6 +433,7 @@ def run(
             ("--volume, -v TEXT", "Network volume name (creates if needed)"),
             ("--provider, -p TEXT", "Provider filter (e.g. primeintellect, vastai)"),
             ("--region TEXT", "Region filter (e.g. US, EU, secure, community)"),
+            ("--image, -i TEXT", "Docker image override (e.g. runpod/autoresearch:latest)"),
             ("--auto", "Auto-select cheapest offer, no prompts"),
             ("--help, -h", "Show this help"),
         ])
@@ -642,6 +645,8 @@ def run(
             gpu_type_filter=gpu_type,
             volume_id=volume_id,
             volume_region=volume_region,
+            script_path=script_path,
+            image_override=image,
         )
     except KeyboardInterrupt:
         console.print()
@@ -681,7 +686,12 @@ def run(
     register_cleanup_handler(config, instances)
     store.update_session_status(SessionStatus.RUNNING)
 
-    # Execution
+    # Execution — forward env vars so scripts/executor can use them
+    if image:
+        os.environ["AUTOFOUNDRY_IMAGE"] = image
+    if config.huggingface_token:
+        os.environ["HUGGINGFACE_TOKEN"] = config.huggingface_token
+
     from autofoundry.executor import run_all_experiments
     from autofoundry.reporter import print_report
 
