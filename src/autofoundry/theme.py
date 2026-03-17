@@ -29,7 +29,7 @@ TERMS = {
     "session": "OPERATION",
     "dashboard": "COMMAND CENTER",
     "provider": "SUPPLY LINE",
-    "planning": "TACTICAL ASSESSMENT",
+    "planning": "INVENTORY ASSESSMENT",
     "shutdown": "TERMINATION PROTOCOL",
     "offers": "RESERVES",
 }
@@ -96,7 +96,7 @@ BANNER = r"""[af.primary]
 
 SESSION_STATUS_DISPLAY = {
     "configuring": "CONFIGURING",
-    "planning": "TACTICAL ASSESSMENT",
+    "planning": "INVENTORY ASSESSMENT",
     "provisioning": "ACTIVATION TEST",
     "running": "DEPLOYED",
     "paused": "STANDBY",
