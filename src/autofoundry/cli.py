@@ -979,7 +979,7 @@ def inventory(
             ("--help, -h", "Show this help"),
         ])
         raise typer.Exit()
-    from autofoundry.planner import display_offers, query_all_offers
+    from autofoundry.planner import display_offers, expand_provider, query_all_offers
 
     print_banner(version=__version__)
     config = _load_or_setup_config()
@@ -999,7 +999,20 @@ def inventory(
         print_error(f"No inventory found for {gpu_type}")
         raise typer.Exit(1)
 
-    display_offers(all_offers)
+    displayed, truncated = display_offers(all_offers)
+
+    while truncated:
+        pick = Prompt.ask(
+            "  [af.label]Provider name to expand (or Enter to exit)[/af.label]",
+            default="",
+        )
+        if not pick.strip():
+            break
+        pick_lower = pick.strip().lower()
+        if pick_lower in truncated:
+            displayed = expand_provider(pick_lower, truncated, displayed)
+        else:
+            print_error(f"Unknown provider. Options: {', '.join(truncated.keys())}")
 
 
 @app.command(context_settings={"help_option_names": []})
