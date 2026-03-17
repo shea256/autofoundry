@@ -97,6 +97,7 @@ if [ -x "$VENV_DIR/bin/python" ] && "$VENV_DIR/bin/python" -c "import torch" 2>/
     PYTHON_BIN="$VENV_DIR/bin/python"
 elif [ "$IS_PREBUILT" = "1" ]; then
     # Pre-built image: inherit system torch via --system-site-packages.
+    [ -d "$VENV_DIR" ] && rm -rf "$VENV_DIR"
     echo "Pre-built image detected — installing lightweight deps only."
     $PYTHON_BIN -m venv --system-site-packages "$VENV_DIR"
     PYTHON_BIN="$VENV_DIR/bin/python"
@@ -121,11 +122,16 @@ EXTRACT_LIGHT
     rm -f /tmp/af_requirements.txt
 else
     # Fresh install: isolated venv with all deps including torch.
-    echo "Installing all dependencies (including torch)..."
-    $UV venv --python "$PYTHON_BIN" "$VENV_DIR"
-    PYTHON_BIN="$VENV_DIR/bin/python"
-    $UV pip install --python "$PYTHON_BIN" --no-deps --no-build-isolation . 2>/dev/null || true
-    $PYTHON_BIN - <<'EXTRACT_DEPS' > /tmp/af_requirements.txt
+    # Retry loop: cloud provider filesystems (RunPod /workspace, etc.) can
+    # return "Stale file handle" (os error 116) on transient storage hiccups.
+    [ -d "$VENV_DIR" ] && rm -rf "$VENV_DIR"
+    MAX_ATTEMPTS=3
+    for attempt in $(seq 1 $MAX_ATTEMPTS); do
+        echo "Installing all dependencies (including torch)... (attempt $attempt/$MAX_ATTEMPTS)"
+        $UV venv --python "$PYTHON_BIN" "$VENV_DIR"
+        PYTHON_BIN="$VENV_DIR/bin/python"
+        $UV pip install --python "$PYTHON_BIN" --no-deps --no-build-isolation . 2>/dev/null || true
+        $PYTHON_BIN - <<'EXTRACT_DEPS' > /tmp/af_requirements.txt
 in_deps = False
 for line in open("pyproject.toml"):
     s = line.strip()
@@ -139,8 +145,22 @@ for line in open("pyproject.toml"):
     if s:
         print(s)
 EXTRACT_DEPS
-    $UV pip install --python "$PYTHON_BIN" -r /tmp/af_requirements.txt
-    rm -f /tmp/af_requirements.txt
+        if $UV pip install --python "$PYTHON_BIN" -r /tmp/af_requirements.txt; then
+            rm -f /tmp/af_requirements.txt
+            break
+        fi
+        rm -f /tmp/af_requirements.txt
+        echo "Install failed (attempt $attempt/$MAX_ATTEMPTS)."
+        if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+            echo "Cleaning up venv and retrying in 5s..."
+            rm -rf "$VENV_DIR"
+            PYTHON_BIN="${AUTORESEARCH_PYTHON:-$(command -v python3 || command -v python3.10)}"
+            sleep 5
+        else
+            echo "All $MAX_ATTEMPTS attempts failed." >&2
+            exit 1
+        fi
+    done
 fi
 
 $PYTHON_BIN prepare.py
