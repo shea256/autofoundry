@@ -999,7 +999,7 @@ def inventory(
         print_error(f"No inventory found for {gpu_type}")
         raise typer.Exit(1)
 
-    display_offers(all_offers)
+    display_offers(all_offers, truncate=False)
 
 
 @app.command(context_settings={"help_option_names": []})
