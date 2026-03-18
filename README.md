@@ -20,8 +20,9 @@ Autofoundry is a CLI companion to [Karpathy's autoresearch](https://github.com/k
 ```bash
 git clone https://github.com/autofoundry/autofoundry.git
 cd autofoundry
+uv venv && source .venv/bin/activate
 uv pip install -e .
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider runpod --auto
+autofoundry run scripts/run_autoresearch.sh --provider runpod --auto
 ```
 
 On first run, Autofoundry walks you through configuring provider API keys, SSH key path, default GPU type, minimum download bandwidth (default 5000 Mbps — filters out slow Vast.ai hosts), and HuggingFace token. Config is saved to `~/.config/autofoundry/config.toml`.
@@ -35,7 +36,7 @@ pip install autofoundry
 ## How It Works
 
 ```
-autofoundry run train.sh --num 4 --gpu H100
+autofoundry run train.sh --num 4
 ```
 
 1. **Query providers** — Fetches real-time GPU pricing and availability across all configured providers
@@ -68,10 +69,10 @@ Autofoundry aggregates these across all experiment runs in the final report.
 Run [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) on any provider:
 
 ```bash
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider runpod --region US --auto
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider lambdalabs --region US --auto
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider vastai --auto
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider primeintellect --auto
+autofoundry run scripts/run_autoresearch.sh --provider runpod --region US --auto
+autofoundry run scripts/run_autoresearch.sh --provider lambdalabs --region US --auto
+autofoundry run scripts/run_autoresearch.sh --provider vastai --auto
+autofoundry run scripts/run_autoresearch.sh --provider primeintellect --auto
 ```
 
 This provisions an H100, clones autoresearch, trains a 50M parameter language model, and reports metrics including validation BPB, MFU, and throughput.
@@ -138,9 +139,9 @@ autofoundry inventory [-g GPU]              Browse GPU inventory
 autofoundry volumes list                    List network volumes
 autofoundry volumes create [--name] [--provider] [--size] [--region]
                                             Create a new network volume
-autofoundry status [OP_ID]                  Show operation status
-autofoundry results [OP_ID]                 Show experiment metrics
-autofoundry teardown OP_ID                  Terminate instances
+autofoundry status [SESSION_ID]              Show operation status
+autofoundry results [SESSION_ID]             Show experiment metrics
+autofoundry teardown SESSION_ID              Terminate instances
 ```
 
 ## Architecture
