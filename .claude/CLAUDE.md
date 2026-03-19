@@ -11,7 +11,7 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 
 - **CLI**: `src/autofoundry/cli.py` — `run`, `config`, `inventory`, `volumes` (list, create), `status`, `results`, `teardown` commands via Typer
 - **Models**: `src/autofoundry/models.py` — GpuOffer, InstanceConfig, InstanceInfo, VolumeInfo, ProvisioningPlan
-- **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml` (custom serializer outputs lowercase `true`/`false` for booleans); includes `min_bandwidth_mbps` (default 5000), `default_tier` (default `datacenter-80gb+`), and `huggingface_token`; all values support env var fallbacks (config.toml takes precedence)
+- **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml` (custom serializer outputs lowercase `true`/`false` for booleans); includes `min_bandwidth_mbps` (default 5000), `default_segment` (default `datacenter`), `default_min_vram` (default `80`), and `huggingface_token`; all values support env var fallbacks (config.toml takes precedence)
 - **GPU Filter**: `src/autofoundry/gpu_filter.py` — GPU tier definitions (category+VRAM), name matching, VRAM filtering, and query resolution
 - **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect,lambdalabs}.py`
 - **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("operations", "units", "supply lines", "reserves", "sync test"); `term()` helper selects singular/plural forms based on count
@@ -88,15 +88,15 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - Resume support: `--resume` flag restarts stopped instances and runs pending experiments
 
 ## GPU Tier System
-- Tiers combine a **category** (consumer, workstation, datacenter) with a **VRAM range** and **GPU name patterns**
-- 7 tiers: `consumer-16gb+`, `workstation-16gb+`, `workstation-48gb+`, `datacenter-24gb+`, `datacenter-40gb+`, `datacenter-80gb+`, `datacenter-140gb+`
-- Default tier: `datacenter-80gb+` (A100 80GB, H100)
+- Tiers combine a **segment** (consumer, workstation, datacenter) with a **VRAM range** and **GPU name patterns**
+- 7 internal tiers used for pattern matching and interactive selection
+- Default: `--segment datacenter --min-vram 80` (A100 80GB, H100)
 - `gpu_name_matches()` supports multi-token patterns (e.g. "RTX 4090" matches "NVIDIA RTX 4090") via consecutive token prefix matching
-- Patterns define the GPU family, VRAM range disambiguates variants (e.g. A100 appears in both `datacenter-40gb+` and `datacenter-80gb+`)
+- Patterns define the GPU family, VRAM range disambiguates variants (e.g. A100 appears in both 40GB and 80GB tiers)
 - `tier_for_gpu(gpu_name, vram_gb)` classifies a GPU into a tier using both name patterns and VRAM range
-- Old tier names (`80gb+`, `48gb+`, etc.) are auto-migrated to new names in both `tier_for_name()` and `Config.load()`
+- Old `default_tier` config values (e.g. `datacenter-80gb+`) are auto-migrated to `default_segment` + `default_min_vram` in `Config.load()`
 - Both `run` and `inventory` commands use interactive tier selection; users can also type a GPU name directly at the prompt
-- CLI flags: `--gpu` for specific GPU name, `--tier` for tier name, `--vram-min`/`--vram-max` for custom ranges
+- CLI flags: `--gpu` for specific GPU name, `--segment`/`-s` for category, `--min-vram`/`--max-vram` for VRAM range
 
 ## Inventory UI
 - `planner.py` displays up to 10 GPU offers per provider initially, with interactive expansion to view all

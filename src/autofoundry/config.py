@@ -55,7 +55,8 @@ class Config:
         self.api_keys: dict[ProviderName, str] = {}
         self.ssh_key_path: str = str(Path.home() / ".ssh" / "id_rsa")
         self.default_gpu_type: str = "H100"  # legacy, kept for backward compat
-        self.default_tier: str = "datacenter-80gb+"
+        self.default_segment: str = "datacenter"
+        self.default_min_vram: float | None = 80.0
         self.min_bandwidth_mbps: float = 5000.0
         self.huggingface_token: str = ""
         self.last_script: str = ""
@@ -79,7 +80,8 @@ class Config:
         data: dict = {
             "ssh_key_path": self.ssh_key_path,
             "default_gpu_type": self.default_gpu_type,
-            "default_tier": self.default_tier,
+            "default_segment": self.default_segment,
+            "default_min_vram": self.default_min_vram if self.default_min_vram is not None else "",
             "min_bandwidth_mbps": self.min_bandwidth_mbps,
             "huggingface_token": self.huggingface_token,
             "last_script": self.last_script,
@@ -103,17 +105,15 @@ class Config:
 
         config.ssh_key_path = data.get("ssh_key_path", config.ssh_key_path)
         config.default_gpu_type = data.get("default_gpu_type", config.default_gpu_type)
-        config.default_tier = data.get("default_tier", config.default_tier)
         config.min_bandwidth_mbps = float(data.get("min_bandwidth_mbps", config.min_bandwidth_mbps))
-        # Migrate old VRAM-only tier names to new category+VRAM names
-        _TIER_MIGRATION = {
-            "<24gb": "consumer-16gb+",
-            "24gb+": "datacenter-24gb+",
-            "48gb+": "workstation-48gb+",
-            "80gb+": "datacenter-80gb+",
-            "140gb+": "datacenter-140gb+",
-        }
-        config.default_tier = _TIER_MIGRATION.get(config.default_tier, config.default_tier)
+
+        # Load segment/min_vram, migrating from old default_tier if present
+        if "default_segment" in data:
+            config.default_segment = data["default_segment"]
+            raw_vram = data.get("default_min_vram", "")
+            config.default_min_vram = float(raw_vram) if raw_vram != "" else None
+        elif "default_tier" in data:
+            config._migrate_default_tier(data["default_tier"])
         config.huggingface_token = data.get("huggingface_token", "")
         config.last_script = data.get("last_script", "")
         config._next_operation = data.get("next_operation", 1)
@@ -137,6 +137,27 @@ class Config:
         if not config.configured_providers:
             return None
         return config
+
+    def _migrate_default_tier(self, tier_name: str) -> None:
+        """Migrate old default_tier value to segment + min_vram."""
+        from autofoundry.gpu_filter import TIER_BY_NAME
+
+        # Try direct lookup
+        tier = TIER_BY_NAME.get(tier_name)
+        if tier:
+            self.default_segment = tier.category
+            self.default_min_vram = tier.vram_min
+            return
+
+        # Try parsing "category-NNgb+" format
+        if "-" in tier_name:
+            parts = tier_name.rsplit("-", 1)
+            self.default_segment = parts[0]
+            vram_part = parts[1].lower().replace("gb+", "").replace("gb", "")
+            try:
+                self.default_min_vram = float(vram_part)
+            except ValueError:
+                pass
 
     def _apply_env_fallbacks(self) -> None:
         """Fill missing config values from environment variables."""

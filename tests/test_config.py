@@ -53,6 +53,50 @@ class TestConfig:
         assert config.next_operation_id == "op-2"
         assert config.next_operation_id == "op-3"
 
+    def test_save_and_load_segment_fields(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "autofoundry"
+        config_file = config_dir / "config.toml"
+        sessions_dir = config_dir / "sessions"
+
+        with (
+            patch("autofoundry.config.CONFIG_DIR", config_dir),
+            patch("autofoundry.config.CONFIG_FILE", config_file),
+            patch("autofoundry.config.SESSIONS_DIR", sessions_dir),
+        ):
+            config = Config()
+            config.api_keys[ProviderName.RUNPOD] = "key"
+            config.default_segment = "workstation"
+            config.default_min_vram = 48.0
+            config.save()
+
+            loaded = Config.load()
+            assert loaded.default_segment == "workstation"
+            assert loaded.default_min_vram == 48.0
+
+    def test_migrate_default_tier(self, tmp_path: Path) -> None:
+        """Old default_tier in config.toml should migrate to segment + min_vram."""
+        config_dir = tmp_path / "autofoundry"
+        config_file = config_dir / "config.toml"
+        sessions_dir = config_dir / "sessions"
+        config_dir.mkdir(parents=True)
+        sessions_dir.mkdir()
+
+        config_file.write_text(
+            'default_tier = "datacenter-80gb+"\n'
+            "\n"
+            "[api_keys]\n"
+            'runpod = "test-key"\n'
+        )
+
+        with (
+            patch("autofoundry.config.CONFIG_DIR", config_dir),
+            patch("autofoundry.config.CONFIG_FILE", config_file),
+            patch("autofoundry.config.SESSIONS_DIR", sessions_dir),
+        ):
+            loaded = Config.load()
+            assert loaded.default_segment == "datacenter"
+            assert loaded.default_min_vram == 80.0
+
     def test_no_image_fields(self) -> None:
         """Config should not have image-related fields after Docker removal."""
         config = Config()
