@@ -21,10 +21,10 @@ Autofoundry is a CLI companion to [Karpathy's autoresearch](https://github.com/k
 git clone https://github.com/autofoundry/autofoundry.git
 cd autofoundry
 uv pip install -e .
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider runpod --auto
+autofoundry run scripts/run_autoresearch.sh --tier datacenter-80gb+ --provider runpod --auto
 ```
 
-On first run, Autofoundry walks you through configuring provider API keys, SSH key path, default GPU type, minimum download bandwidth (default 5000 Mbps — filters out slow Vast.ai hosts), and HuggingFace token. Config is saved to `~/.config/autofoundry/config.toml`.
+On first run, Autofoundry walks you through configuring provider API keys, SSH key path, minimum download bandwidth (default 5000 Mbps — filters out slow Vast.ai hosts), and HuggingFace token. Config is saved to `~/.config/autofoundry/config.toml`.
 
 If you already have your own experiment scripts, you can install just the CLI:
 
@@ -35,11 +35,11 @@ pip install autofoundry
 ## How It Works
 
 ```
-autofoundry run train.sh --num 4 --gpu H100
+autofoundry run train.sh --num 4 --tier datacenter-80gb+
 ```
 
 1. **Query providers** — Fetches real-time GPU pricing and availability across all configured providers
-2. **Select GPUs** — Interactive table lets you pick offers and quantities
+2. **Select GPUs** — Interactive tier selection (consumer/workstation/datacenter) or specific GPU name, then pick offers and quantities
 3. **Provision** — Spins up instances in parallel, waits for SSH ready
 4. **Execute** — Uploads your script, distributes experiments round-robin across instances, streams output live
 5. **Report** — Parses metrics from script output and displays best/mean/worst summary
@@ -68,10 +68,10 @@ Autofoundry aggregates these across all experiment runs in the final report.
 Run [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) on any provider:
 
 ```bash
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider runpod --region US --auto
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider lambdalabs --region US --auto
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider vastai --auto
-autofoundry run scripts/run_autoresearch.sh -g H100 --provider primeintellect --auto
+autofoundry run scripts/run_autoresearch.sh --gpu H100 --provider runpod --region US --auto
+autofoundry run scripts/run_autoresearch.sh --gpu H100 --provider lambdalabs --region US --auto
+autofoundry run scripts/run_autoresearch.sh --gpu H100 --provider vastai --auto
+autofoundry run scripts/run_autoresearch.sh --gpu H100 --provider primeintellect --auto
 ```
 
 This provisions an H100, clones autoresearch, trains a 50M parameter language model, and reports metrics including validation BPB, MFU, and throughput.
@@ -125,16 +125,27 @@ Arguments:
 
 Options:
   --num, -n           Number of experiment runs (default: 1)
-  --gpu, -g           GPU type to search for (default: H100)
+  --gpu, -g           Specific GPU type (e.g. H100, RTX 4090)
+  --tier, -t          GPU tier (e.g. datacenter-80gb+, consumer-16gb+)
   --provider, -p      Provider filter (e.g. runpod, vastai, primeintellect, lambdalabs)
   --region            Region filter (e.g. US, EU)
   --resume, -r        Resume a previous session
   --volume, -v        Network volume name (RunPod, Lambda Labs)
   --image, -i         Docker image override (e.g. runpod/autoresearch:latest)
+  --multi-gpu         Include multi-GPU instances
   --auto              Auto-select cheapest offer, no prompts
 
+GPU Tiers:
+  consumer-16gb+      RTX 3090, RTX 4090, RTX 5090
+  workstation-16gb+   RTX 2000/4000 Ada, A4000, A5000
+  workstation-48gb+   RTX 6000 Ada, A6000, RTX PRO 6000
+  datacenter-24gb+    L4
+  datacenter-40gb+    A40, L40/L40S, A100 40GB
+  datacenter-80gb+    A100 80GB, H100 (default)
+  datacenter-140gb+   H200, GH200, B200, B300
+
 autofoundry config                          Configure provider API keys
-autofoundry inventory [-g GPU]              Browse GPU inventory
+autofoundry inventory [-g GPU] [-t TIER]    Browse GPU inventory
 autofoundry volumes list                    List network volumes
 autofoundry volumes create [--name] [--provider] [--size] [--region]
                                             Create a new network volume
@@ -147,6 +158,7 @@ autofoundry teardown OP_ID                  Terminate instances
 
 ```
 cli.py           Entry point — run, config, inventory, volumes, status, results, teardown
+gpu_filter.py    GPU tier definitions, name matching, and query resolution
 planner.py       GPU offer querying and selection
 provisioner.py   Instance lifecycle management
 executor.py      SSH-based script upload and execution

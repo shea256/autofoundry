@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from autofoundry.gpu_filter import GpuQuery
 from autofoundry.models import GpuOffer, ProviderName, ProvisioningPlan
 from autofoundry.planner import query_all_offers, recommend_plan
 
@@ -56,7 +57,7 @@ class TestQueryAllOffers:
             ProviderName.PRIMEINTELLECT: "key2",
         }
 
-        def mock_get_provider(name, key):
+        def mock_get_provider(name, key, **kwargs):
             mock = MagicMock()
             if name == ProviderName.RUNPOD:
                 mock.list_gpu_offers.return_value = runpod_offers
@@ -65,7 +66,7 @@ class TestQueryAllOffers:
             return mock
 
         with patch("autofoundry.planner.get_provider", side_effect=mock_get_provider):
-            offers = query_all_offers(mock_config, "H100")
+            offers = query_all_offers(mock_config, GpuQuery(gpu_type="H100"))
 
         assert len(offers) == 2
         # Should be sorted by price
@@ -76,13 +77,13 @@ class TestQueryAllOffers:
         mock_config.configured_providers = [ProviderName.RUNPOD]
         mock_config.api_keys = {ProviderName.RUNPOD: "key1"}
 
-        def mock_get_provider(name, key):
+        def mock_get_provider(name, key, **kwargs):
             mock = MagicMock()
             mock.list_gpu_offers.side_effect = RuntimeError("API down")
             return mock
 
         with patch("autofoundry.planner.get_provider", side_effect=mock_get_provider):
-            offers = query_all_offers(mock_config, "H100")
+            offers = query_all_offers(mock_config, GpuQuery(gpu_type="H100"))
 
         assert offers == []
 
