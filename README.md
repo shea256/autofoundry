@@ -20,21 +20,21 @@ Autofoundry is a CLI companion to [Karpathy's autoresearch](https://github.com/k
 ```bash
 git clone https://github.com/autofoundry/autofoundry.git
 cd autofoundry
-uv run autofoundry run scripts/run_autoresearch.sh --provider runpod --auto
+uv tool install autofoundry
+```
+
+Then run:
+
+```bash
+autofoundry run
 ```
 
 On first run, Autofoundry walks you through configuring provider API keys, SSH key path, minimum download bandwidth (default 5000 Mbps — filters out slow Vast.ai hosts), and HuggingFace token. Config is saved to `~/.config/autofoundry/config.toml`.
 
-If you already have your own experiment scripts, you can install just the CLI:
-
-```bash
-pip install autofoundry
-```
-
 ## How It Works
 
 ```
-autofoundry run train.sh --num 4
+autofoundry run
 ```
 
 1. **Query providers** — Fetches real-time GPU pricing and availability across all configured providers
@@ -44,18 +44,79 @@ autofoundry run train.sh --num 4
 5. **Report** — Parses metrics from script output and displays best/mean/worst summary
 6. **Teardown** — Terminates all instances on completion (or Ctrl-C)
 
-## Example: autoresearch
+## Examples
 
-Run [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) on any provider:
+### Run experiments
 
 ```bash
-autofoundry run scripts/run_autoresearch.sh --provider runpod --region US --auto
-autofoundry run scripts/run_autoresearch.sh --provider lambdalabs --region US --auto
-autofoundry run scripts/run_autoresearch.sh --provider vastai --auto
-autofoundry run scripts/run_autoresearch.sh --provider primeintellect --auto
+# Interactive mode — walks you through everything
+autofoundry run
+
+# Run a specific script
+autofoundry run scripts/run_autoresearch.sh
+
+# Specific GPU with multiple experiment runs
+autofoundry run train.sh --gpu H100 --num 4
+
+# Auto-select cheapest offer in a tier
+autofoundry run train.sh --tier datacenter-80gb+ --auto
+
+# Target a specific provider
+autofoundry run train.sh --tier datacenter-80gb+ --provider runpod --auto
+autofoundry run train.sh --tier datacenter-80gb+ --provider lambdalabs --auto
+autofoundry run train.sh --tier datacenter-80gb+ --provider vastai --auto
+autofoundry run train.sh --tier datacenter-80gb+ --provider primeintellect --auto
+
+# Attach a network volume (RunPod, Lambda Labs)
+autofoundry run train.sh --volume my-data --provider runpod
+
+# Resume a previous session
+autofoundry run --resume <session-id>
 ```
 
-This provisions an H100, clones autoresearch, trains a 50M parameter language model, and reports metrics including validation BPB, MFU, and throughput.
+### Browse GPU inventory
+
+```bash
+# Browse all available GPUs across providers
+autofoundry inventory
+
+# Filter by tier or GPU name
+autofoundry inventory --tier datacenter-80gb+
+autofoundry inventory --gpu A100
+```
+
+### Configure
+
+```bash
+# Interactive setup for API keys, SSH key, and defaults
+autofoundry config
+```
+
+### Manage volumes
+
+```bash
+# List volumes across providers
+autofoundry volumes list
+
+# Create a new volume
+autofoundry volumes create --name my-data --provider runpod
+```
+
+### Monitor and manage sessions
+
+```bash
+# Show all sessions
+autofoundry status
+
+# Show a specific session
+autofoundry status <session-id>
+
+# View metrics from most recent run
+autofoundry results
+
+# Terminate instances for a session
+autofoundry teardown <session-id>
+```
 
 See the [guides](docs/guides.md) for writing experiment scripts, network volumes, resuming sessions, custom images, CLI reference, and architecture details.
 
