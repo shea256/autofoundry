@@ -54,7 +54,8 @@ class Config:
     def __init__(self) -> None:
         self.api_keys: dict[ProviderName, str] = {}
         self.ssh_key_path: str = str(Path.home() / ".ssh" / "id_rsa")
-        self.default_gpu_type: str = "H100"
+        self.default_gpu_type: str = "H100"  # legacy, kept for backward compat
+        self.default_tier: str = "datacenter-80gb+"
         self.min_bandwidth_mbps: float = 5000.0
         self.huggingface_token: str = ""
         self.last_script: str = ""
@@ -78,6 +79,7 @@ class Config:
         data: dict = {
             "ssh_key_path": self.ssh_key_path,
             "default_gpu_type": self.default_gpu_type,
+            "default_tier": self.default_tier,
             "min_bandwidth_mbps": self.min_bandwidth_mbps,
             "huggingface_token": self.huggingface_token,
             "last_script": self.last_script,
@@ -101,7 +103,17 @@ class Config:
 
         config.ssh_key_path = data.get("ssh_key_path", config.ssh_key_path)
         config.default_gpu_type = data.get("default_gpu_type", config.default_gpu_type)
+        config.default_tier = data.get("default_tier", config.default_tier)
         config.min_bandwidth_mbps = float(data.get("min_bandwidth_mbps", config.min_bandwidth_mbps))
+        # Migrate old VRAM-only tier names to new category+VRAM names
+        _TIER_MIGRATION = {
+            "<24gb": "consumer-16gb+",
+            "24gb+": "datacenter-24gb+",
+            "48gb+": "workstation-48gb+",
+            "80gb+": "datacenter-80gb+",
+            "140gb+": "datacenter-140gb+",
+        }
+        config.default_tier = _TIER_MIGRATION.get(config.default_tier, config.default_tier)
         config.huggingface_token = data.get("huggingface_token", "")
         config.last_script = data.get("last_script", "")
         config._next_operation = data.get("next_operation", 1)

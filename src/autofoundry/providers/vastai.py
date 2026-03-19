@@ -99,7 +99,9 @@ class VastAIProvider:
 
         return [n for n in all_names if gpu_type.upper() in n.upper()]
 
-    def list_gpu_offers(self, gpu_type: str | None = None) -> list[GpuOffer]:
+    def list_gpu_offers(
+        self, gpu_type: str | None = None, *, vram_min: float | None = None,
+    ) -> list[GpuOffer]:
         # Vast.ai CLI uses POST /bundles/ with query as JSON body
         query: dict = {
             "rentable": {"eq": True},
@@ -110,6 +112,10 @@ class VastAIProvider:
         }
         if self._min_bandwidth_mbps > 0:
             query["inet_down"] = {"gte": self._min_bandwidth_mbps}
+
+        # Server-side VRAM filter (in MB) for tier-based queries
+        if vram_min is not None:
+            query["gpu_ram"] = {"gte": vram_min * 1024}
 
         # Server-side GPU name filter using the "in" operator
         if gpu_type:

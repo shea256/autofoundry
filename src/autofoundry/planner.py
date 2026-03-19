@@ -7,6 +7,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.prompt import Confirm, IntPrompt, Prompt
 
 from autofoundry.config import PROVIDER_DISPLAY, Config
+from autofoundry.gpu_filter import (
+    GpuQuery,
+    filter_by_vram,
+    gpu_name_matches,
+)
 from autofoundry.models import GpuOffer, ProviderName, ProvisioningPlan
 from autofoundry.providers import get_provider
 from autofoundry.theme import (
@@ -21,16 +26,19 @@ from autofoundry.theme import (
 
 
 def _query_provider_offers(
-    provider_name: ProviderName, api_key: str, gpu_type: str,
+    provider_name: ProviderName, api_key: str, gpu_type: str | None,
     datacenter_id: str | None = None,
     min_bandwidth_mbps: float = 5000.0,
+    vram_min: float | None = None,
 ) -> tuple[ProviderName, list[GpuOffer], str | None]:
     """Query a single provider for GPU offers. Returns (provider, offers, error)."""
     try:
         provider = get_provider(provider_name, api_key, min_bandwidth_mbps=min_bandwidth_mbps)
-        # Only RunPod supports datacenter_id filtering
+        # Provider-specific kwargs
         if datacenter_id and provider_name == ProviderName.RUNPOD:
             offers = provider.list_gpu_offers(gpu_type, datacenter_id=datacenter_id)
+        elif vram_min is not None and provider_name == ProviderName.VASTAI:
+            offers = provider.list_gpu_offers(gpu_type, vram_min=vram_min)
         else:
             offers = provider.list_gpu_offers(gpu_type)
         return (provider_name, offers, None)
@@ -39,42 +47,87 @@ def _query_provider_offers(
 
 
 def query_all_offers(
-    config: Config, gpu_type: str, datacenter_id: str | None = None,
+    config: Config, query: GpuQuery, datacenter_id: str | None = None,
 ) -> list[GpuOffer]:
-    """Query all configured providers for GPU offers concurrently."""
-    all_offers: list[GpuOffer] = []
+    """Query all configured providers for GPU offers concurrently.
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    When query has a gpu_type, passes it to providers for server-side filtering.
+    When query uses tier/VRAM filtering, fetches all offers and filters client-side.
+    """
+    # For tier-based queries, pass vram_min to providers that support
+    # server-side VRAM filtering (e.g. Vast.ai) so their result limits
+    # don't exclude high-VRAM GPUs.
+    provider_gpu_type = query.gpu_type  # None for tier-based queries
+    provider_vram_min = query.vram_min if not query.gpu_type else None
+
+    # Collect raw results per provider
+    raw_offers: dict[ProviderName, list[GpuOffer]] = {}
+    provider_errors: dict[ProviderName, str] = {}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
             pool.submit(
-                _query_provider_offers, provider, config.api_keys[provider], gpu_type,
-                datacenter_id, config.min_bandwidth_mbps,
+                _query_provider_offers, provider, config.api_keys[provider],
+                provider_gpu_type, datacenter_id, config.min_bandwidth_mbps,
+                provider_vram_min,
             ): provider
             for provider in config.configured_providers
         }
         for future in as_completed(futures):
             provider = futures[future]
-            display = PROVIDER_DISPLAY.get(provider, provider.value)
             try:
                 _, offers, error = future.result()
                 if error:
-                    print_error(f"{display}: {error}")
-                elif offers:
-                    console.print(
-                        f"  [af.success]OK:[/af.success] {display} — "
-                        f"{len(offers)} {term('instances', len(offers)).lower()} found"
-                    )
+                    provider_errors[provider] = error
                 else:
-                    console.print(
-                        f"  [af.muted]{display} — no {gpu_type} {TERMS['instances'].lower()}[/af.muted]"
-                    )
-                all_offers.extend(offers)
+                    raw_offers[provider] = offers
             except Exception as e:
-                print_error(f"{display} query failed: {e}")
+                provider_errors[provider] = str(e)
+
+    # Merge all offers and apply filters
+    all_offers: list[GpuOffer] = []
+    for offers in raw_offers.values():
+        all_offers.extend(offers)
+
+    if query.single_gpu:
+        all_offers = [o for o in all_offers if o.gpu_count == 1]
+
+    if query.vram_min is not None or query.vram_max is not None:
+        all_offers = filter_by_vram(all_offers, query.vram_min, query.vram_max)
+
+    if query.gpu_patterns:
+        all_offers = [
+            o for o in all_offers
+            if any(gpu_name_matches(pat, o.gpu_type) for pat in query.gpu_patterns)
+        ]
+
+    if query.gpu_type:
+        all_offers = [o for o in all_offers if gpu_name_matches(query.gpu_type, o.gpu_type)]
+
+    # Report per-provider counts (after filtering)
+    for provider in config.configured_providers:
+        display = PROVIDER_DISPLAY.get(provider, provider.value)
+        if provider in provider_errors:
+            print_error(f"{display}: {provider_errors[provider]}")
+        else:
+            count = sum(1 for o in all_offers if o.provider == provider)
+            if count:
+                console.print(
+                    f"  [af.success]OK:[/af.success] {display} — "
+                    f"{count} {term('instances', count).lower()} found"
+                )
+            else:
+                units = TERMS['instances'].lower()
+                console.print(
+                    f"  [af.muted]{display} — no matching {units}[/af.muted]"
+                )
 
     # Sort by price ascending
     all_offers.sort(key=lambda o: o.price_per_hour)
     return all_offers
+
+
+_DEFAULT_PER_PROVIDER = 10
 
 
 def display_offers(offers: list[GpuOffer], *, truncate: bool = True) -> tuple[list[GpuOffer], dict]:
@@ -89,11 +142,6 @@ def display_offers(offers: list[GpuOffer], *, truncate: bool = True) -> tuple[li
         return [], {}
 
     from collections import defaultdict
-
-    INITIAL_PER_PROVIDER: dict[ProviderName, int] = {
-        ProviderName.VASTAI: 6,
-    }
-    DEFAULT_PER_PROVIDER = 10
 
     by_provider: dict[ProviderName, list[GpuOffer]] = defaultdict(list)
     for offer in offers:
@@ -118,8 +166,7 @@ def display_offers(offers: list[GpuOffer], *, truncate: bool = True) -> tuple[li
     for provider in provider_order:
         all_provider_offers = by_provider[provider]
         if truncate:
-            cap = INITIAL_PER_PROVIDER.get(provider, DEFAULT_PER_PROVIDER)
-            show_offers = all_provider_offers[:cap]
+            show_offers = all_provider_offers[:_DEFAULT_PER_PROVIDER]
         else:
             show_offers = all_provider_offers
         total_count = len(all_provider_offers)
@@ -151,12 +198,9 @@ def expand_provider(
     displayed: list[GpuOffer],
 ) -> list[GpuOffer]:
     """Expand a truncated provider's remaining offers. Mutates truncated_providers and displayed."""
-    _CAPS: dict[ProviderName, int] = {ProviderName.VASTAI: 6}
-
     provider, by_provider = truncated_providers.pop(key)
     all_provider_offers = by_provider[provider]
-    cap = _CAPS.get(provider, 10)
-    remaining = all_provider_offers[cap:]
+    remaining = all_provider_offers[_DEFAULT_PER_PROVIDER:]
     display_name = PROVIDER_DISPLAY.get(provider, provider.value)
 
     global_num = len(displayed) + 1
@@ -227,7 +271,7 @@ def recommend_plan(
 
 def auto_plan(
     config: Config,
-    gpu_type: str,
+    query: GpuQuery,
     total_experiments: int,
     script_path: str,
     provider_filter: str | None = None,
@@ -237,11 +281,12 @@ def auto_plan(
     """Non-interactive planning: auto-select cheapest matching offer."""
     print_header(TERMS["planning"])
     console.print()
-    console.print(f"  [af.muted]Querying supply lines for {gpu_type} availability...[/af.muted]")
+    desc = query.description
+    console.print(f"  [af.muted]Querying supply lines for {desc} availability...[/af.muted]")
 
-    offers = query_all_offers(config, gpu_type, datacenter_id=datacenter_id)
+    offers = query_all_offers(config, query, datacenter_id=datacenter_id)
     if not offers:
-        print_error(f"No {gpu_type} offers found.")
+        print_error(f"No offers found for {query.description}.")
         return None
 
     # Filter by provider
@@ -249,7 +294,7 @@ def auto_plan(
         pf = provider_filter.lower()
         offers = [o for o in offers if pf in o.provider.value.lower()]
         if not offers:
-            print_error(f"No {gpu_type} offers from provider '{provider_filter}'.")
+            print_error(f"No {query.description} offers from provider '{provider_filter}'.")
             return None
 
     # Filter by region (also check metadata.data_center_id)
@@ -286,7 +331,7 @@ def auto_plan(
                 for o in offers
             })
             print_error(
-                f"No {gpu_type} offers matching region '{region_filter}'.\n"
+                f"No {query.description} offers matching region '{region_filter}'.\n"
                 f"  Available regions: {', '.join(regions)}"
             )
             return None
@@ -321,7 +366,7 @@ def auto_plan(
 
 def interactive_plan(
     config: Config,
-    gpu_type: str,
+    query: GpuQuery,
     total_experiments: int,
     script_path: str,
     provider_filter: str | None = None,
@@ -331,12 +376,15 @@ def interactive_plan(
     """Full interactive planning flow: query, display, recommend, confirm."""
     print_header(TERMS["planning"])
     console.print()
+    desc = query.description
     if datacenter_id:
-        console.print(f"  [af.muted]Querying supply lines for {gpu_type} in {datacenter_id}...[/af.muted]")
+        console.print(
+            f"  [af.muted]Querying supply lines for {desc} in {datacenter_id}...[/af.muted]"
+        )
     else:
-        console.print(f"  [af.muted]Querying supply lines for {gpu_type} availability...[/af.muted]")
+        console.print(f"  [af.muted]Querying supply lines for {desc} availability...[/af.muted]")
 
-    offers = query_all_offers(config, gpu_type, datacenter_id=datacenter_id)
+    offers = query_all_offers(config, query, datacenter_id=datacenter_id)
 
     # Apply provider/region filters (e.g. when a volume constrains the choice)
     if provider_filter:

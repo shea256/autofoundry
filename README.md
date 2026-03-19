@@ -23,7 +23,7 @@ cd autofoundry
 uv run autofoundry run scripts/run_autoresearch.sh --provider runpod --auto
 ```
 
-On first run, Autofoundry walks you through configuring provider API keys, SSH key path, default GPU type, minimum download bandwidth (default 5000 Mbps — filters out slow Vast.ai hosts), and HuggingFace token. Config is saved to `~/.config/autofoundry/config.toml`.
+On first run, Autofoundry walks you through configuring provider API keys, SSH key path, minimum download bandwidth (default 5000 Mbps — filters out slow Vast.ai hosts), and HuggingFace token. Config is saved to `~/.config/autofoundry/config.toml`.
 
 If you already have your own experiment scripts, you can install just the CLI:
 
@@ -38,7 +38,7 @@ autofoundry run train.sh --num 4
 ```
 
 1. **Query providers** — Fetches real-time GPU pricing and availability across all configured providers
-2. **Select GPUs** — Interactive table lets you pick offers and quantities
+2. **Select GPUs** — Interactive tier selection (consumer/workstation/datacenter) or specific GPU name, then pick offers and quantities
 3. **Provision** — Spins up instances in parallel, waits for SSH ready
 4. **Execute** — Uploads your script, distributes experiments round-robin across instances, streams output live
 5. **Report** — Parses metrics from script output and displays best/mean/worst summary

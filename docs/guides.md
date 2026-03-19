@@ -67,16 +67,27 @@ Arguments:
 
 Options:
   --num, -n           Number of experiment runs (default: 1)
-  --gpu, -g           GPU type to search for (default: H100)
+  --gpu, -g           Specific GPU type (e.g. H100, RTX 4090)
+  --tier, -t          GPU tier (e.g. datacenter-80gb+, consumer-16gb+)
   --provider, -p      Provider filter (e.g. runpod, vastai, primeintellect, lambdalabs)
   --region            Region filter (e.g. US, EU)
   --resume, -r        Resume a previous session
   --volume, -v        Network volume name (RunPod, Lambda Labs)
   --image, -i         Docker image override (e.g. runpod/autoresearch:latest)
+  --multi-gpu         Include multi-GPU instances
   --auto              Auto-select cheapest offer, no prompts
 
+GPU Tiers:
+  consumer-16gb+      RTX 3090, RTX 4090, RTX 5090
+  workstation-16gb+   RTX 2000/4000 Ada, A4000, A5000
+  workstation-48gb+   RTX 6000 Ada, A6000, RTX PRO 6000
+  datacenter-24gb+    L4
+  datacenter-40gb+    A40, L40/L40S, A100 40GB
+  datacenter-80gb+    A100 80GB, H100 (default)
+  datacenter-140gb+   H200, GH200, B200, B300
+
 autofoundry config                          Configure provider API keys
-autofoundry inventory [-g GPU]              Browse GPU inventory
+autofoundry inventory [-g GPU] [-t TIER]    Browse GPU inventory
 autofoundry volumes list                    List network volumes
 autofoundry volumes create [--name] [--provider] [--size] [--region]
                                             Create a new network volume
@@ -89,6 +100,7 @@ autofoundry teardown SESSION_ID              Terminate instances
 
 ```
 cli.py           Entry point — run, config, inventory, volumes, status, results, teardown
+gpu_filter.py    GPU tier definitions, name matching, and query resolution
 planner.py       GPU offer querying and selection
 provisioner.py   Instance lifecycle management
 executor.py      SSH-based script upload and execution

@@ -12,6 +12,7 @@ from rich.prompt import IntPrompt, Prompt
 
 from autofoundry import __version__
 from autofoundry.config import Config, first_run_setup
+from autofoundry.gpu_filter import DEFAULT_TIER, GPU_TIERS, GpuQuery, resolve_query
 from autofoundry.models import Session, SessionStatus
 from autofoundry.state import SessionStore
 from autofoundry.theme import (
@@ -109,8 +110,8 @@ def _resolve_script(script_arg: str | None, config: Config) -> str:
 
 def _prompt_session_params(
     config: Config, script_arg: str | None = None
-) -> tuple[str, int, str]:
-    """Prompt user for script path, experiment count, and GPU type."""
+) -> tuple[str, int, GpuQuery]:
+    """Prompt user for script path, experiment count, and GPU tier/type."""
     print_header(f"{TERMS['experiment']} CONFIGURATION")
     console.print()
 
@@ -125,13 +126,47 @@ def _prompt_session_params(
     )
     console.print()
 
-    # GPU type
-    gpu_type = Prompt.ask(
-        "  [af.label]GPU type[/af.label]",
-        default=config.default_gpu_type,
+    # GPU tier selection
+    gpu_query = _prompt_tier_selection(config.default_tier)
+
+    return script_path, num_experiments, gpu_query
+
+
+def _prompt_tier_selection(default_tier: str = DEFAULT_TIER) -> GpuQuery:
+    """Prompt user to select a GPU tier interactively.
+
+    Shows numbered tier options grouped by category.
+    """
+    console.print("  [af.label]GPU tier[/af.label]")
+    default_idx = 0
+    current_category = ""
+    for i, tier in enumerate(GPU_TIERS):
+        if tier.category != current_category:
+            current_category = tier.category
+            console.print(f"    [af.secondary]{current_category.title()}[/af.secondary]")
+        marker = " [af.primary](default)[/af.primary]" if tier.name == default_tier else ""
+        console.print(f"      [af.muted]{i + 1}.[/af.muted] {tier.label}{marker}")
+        if tier.name == default_tier:
+            default_idx = i + 1
+
+    console.print()
+    console.print("    [af.muted]Or type a GPU name (e.g. H100)[/af.muted]")
+
+    pick = Prompt.ask(
+        "  [af.label]Select tier #[/af.label]",
+        default=str(default_idx),
     )
 
-    return script_path, num_experiments, gpu_type
+    try:
+        idx = int(pick) - 1
+        if 0 <= idx < len(GPU_TIERS):
+            selected = GPU_TIERS[idx]
+            return resolve_query(tier=selected.name)
+    except ValueError:
+        pass
+
+    # Fallback: treat as GPU name or tier name
+    return resolve_query(gpu_type=pick)
 
 
 def _show_session_summary(session: Session) -> None:
@@ -417,10 +452,12 @@ def run(
     resume: str = typer.Option(None, "--resume", "-r", help="Resume a previous operation"),
     num: int = typer.Option(None, "--num", "-n", help="Number of experiment runs"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type (e.g. H100)"),
+    tier: str = typer.Option(None, "--tier", "-t", help="GPU tier (e.g. datacenter-80gb+, consumer-16gb+)"),
     volume: str = typer.Option(None, "--volume", "-v", help="Network volume name (creates if needed)"),
     provider: str = typer.Option(None, "--provider", "-p", help="Provider filter (e.g. primeintellect, vastai)"),
     region: str = typer.Option(None, "--region", help="Region filter (e.g. US, EU)"),
     image: str = typer.Option(None, "--image", "-i", help="Docker image override (e.g. runpod/autoresearch:latest)"),
+    multi_gpu: bool = typer.Option(False, "--multi-gpu", help="Include multi-GPU instances"),
     auto: bool = typer.Option(False, "--auto", help="Auto-select cheapest offer, no prompts"),
 ) -> None:
     """Launch autofoundry — GPU experiment orchestration engine."""
@@ -430,10 +467,12 @@ def run(
             ("--resume, -r TEXT", "Resume a previous operation"),
             ("--num, -n INTEGER", "Number of experiment runs"),
             ("--gpu, -g TEXT", "GPU type (e.g. H100)"),
+            ("--tier, -t TEXT", "GPU tier (e.g. datacenter-80gb+, consumer-16gb+)"),
             ("--volume, -v TEXT", "Network volume name (creates if needed)"),
             ("--provider, -p TEXT", "Provider filter (e.g. primeintellect, vastai)"),
             ("--region TEXT", "Region filter (e.g. US, EU, secure, community)"),
             ("--image, -i TEXT", "Docker image override (e.g. runpod/autoresearch:latest)"),
+            ("--multi-gpu", "Include multi-GPU instances"),
             ("--auto", "Auto-select cheapest offer, no prompts"),
             ("--help, -h", "Show this help"),
         ])
@@ -568,14 +607,24 @@ def run(
             raise typer.Exit(1)
         script_path = _resolve_script(script, config)
         num_experiments = num if num is not None else 1
-        gpu_type = gpu if gpu is not None else config.default_gpu_type
+        gpu_query = resolve_query(
+            gpu_type=gpu, tier=tier, default_tier=config.default_tier,
+        )
+        if multi_gpu:
+            gpu_query.single_gpu = False
+        gpu_type = gpu_query.description
     else:
-        script_path, num_experiments, gpu_type = _prompt_session_params(config, script)
+        script_path, num_experiments, gpu_query = _prompt_session_params(config, script)
         # Override with CLI flags if provided
         if num is not None:
             num_experiments = num
-        if gpu is not None:
-            gpu_type = gpu
+        if gpu:
+            gpu_query = resolve_query(gpu_type=gpu)
+        elif tier:
+            gpu_query = resolve_query(tier=tier)
+        gpu_type = gpu_query.description
+        if multi_gpu:
+            gpu_query.single_gpu = False
 
     # Remember script for next time
     config.last_script = script_path
@@ -614,14 +663,14 @@ def run(
     if auto:
         from autofoundry.planner import auto_plan
         plan = auto_plan(
-            config, gpu_type, num_experiments, script_path,
+            config, gpu_query, num_experiments, script_path,
             provider_filter=vol_provider_filter, region_filter=vol_region_filter,
             datacenter_id=volume_region or None,
         )
     else:
         from autofoundry.planner import interactive_plan
         plan = interactive_plan(
-            config, gpu_type, num_experiments, script_path,
+            config, gpu_query, num_experiments, script_path,
             provider_filter=vol_provider_filter, region_filter=vol_region_filter,
             datacenter_id=volume_region or None,
         )
@@ -971,11 +1020,15 @@ def volumes_create(
 def inventory(
     help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type to filter (e.g. H100)"),
+    tier: str = typer.Option(None, "--tier", "-t", help="GPU tier (e.g. datacenter-80gb+, consumer-16gb+)"),
+    multi_gpu: bool = typer.Option(False, "--multi-gpu", help="Include multi-GPU instances"),
 ) -> None:
     """Browse GPU inventory across all configured supply lines."""
     if help_:
         _print_command_help("autofoundry inventory", "Browse GPU inventory across supply lines", [
             ("--gpu, -g TEXT", "GPU type to filter (e.g. H100)"),
+            ("--tier, -t TEXT", "GPU tier (e.g. datacenter-80gb+, consumer-16gb+)"),
+            ("--multi-gpu", "Include multi-GPU instances"),
             ("--help, -h", "Show this help"),
         ])
         raise typer.Exit()
@@ -985,18 +1038,21 @@ def inventory(
     config = _load_or_setup_config()
 
     if gpu:
-        gpu_type = gpu
+        query = resolve_query(gpu_type=gpu)
+    elif tier:
+        query = resolve_query(tier=tier)
     else:
-        gpu_type = Prompt.ask(
-            "  [af.label]GPU type[/af.label]",
-            default=config.default_gpu_type,
-        )
-    print_status("Searching for", gpu_type)
+        query = _prompt_tier_selection(config.default_tier)
+
+    if multi_gpu:
+        query.single_gpu = False
+
+    print_status("Searching for", query.description)
     console.print()
 
-    all_offers = query_all_offers(config, gpu_type)
+    all_offers = query_all_offers(config, query)
     if not all_offers:
-        print_error(f"No inventory found for {gpu_type}")
+        print_error(f"No inventory found for {query.description}")
         raise typer.Exit(1)
 
     display_offers(all_offers, truncate=False)
