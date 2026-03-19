@@ -66,17 +66,10 @@ GPU_TIERS = [
 ]
 
 TIER_BY_NAME: dict[str, GpuTier] = {t.name: t for t in GPU_TIERS}
+VALID_SEGMENTS = sorted({t.category for t in GPU_TIERS})
 
-DEFAULT_TIER = "datacenter-80gb+"
-
-# Backward-compat mapping from old VRAM-only tier names
-_TIER_MIGRATION: dict[str, str] = {
-    "<24gb": "consumer-16gb+",
-    "24gb+": "datacenter-24gb+",
-    "48gb+": "workstation-48gb+",
-    "80gb+": "datacenter-80gb+",
-    "140gb+": "datacenter-140gb+",
-}
+DEFAULT_SEGMENT = "datacenter"
+DEFAULT_MIN_VRAM = 80.0
 
 
 @dataclass
@@ -86,8 +79,8 @@ class GpuQuery:
     gpu_type: str | None = None       # explicit GPU name filter (e.g. "H100")
     vram_min: float | None = None
     vram_max: float | None = None
-    tier: str | None = None           # tier name like "datacenter-80gb+"
-    gpu_patterns: tuple[str, ...] | None = None  # patterns from tier
+    segment: str | None = None        # category: "consumer", "workstation", "datacenter"
+    gpu_patterns: tuple[str, ...] | None = None  # patterns from matching tiers
     single_gpu: bool = True           # only show single-GPU instances
 
     @property
@@ -95,9 +88,11 @@ class GpuQuery:
         """Human-readable description of this query."""
         if self.gpu_type:
             return self.gpu_type
-        if self.tier:
-            t = TIER_BY_NAME.get(self.tier)
-            return t.label if t else self.tier
+        if self.segment:
+            parts = [self.segment.title()]
+            if self.vram_min is not None:
+                parts.append(f"{self.vram_min:.0f}GB+")
+            return " ".join(parts)
         if self.vram_min is not None or self.vram_max is not None:
             lo = f"{self.vram_min:.0f}" if self.vram_min else "0"
             hi = f"{self.vram_max:.0f}" if self.vram_max else "∞"
@@ -153,14 +148,6 @@ def filter_by_vram(
     return result
 
 
-def tier_for_name(name: str) -> GpuTier | None:
-    """Look up a tier by its name string. Supports old tier names via migration."""
-    key = name.lower().strip()
-    # Try direct lookup first, then migrate old names
-    migrated = _TIER_MIGRATION.get(key, key)
-    return TIER_BY_NAME.get(migrated)
-
-
 def tier_for_gpu(gpu_name: str, vram_gb: float) -> GpuTier | None:
     """Find which tier a GPU belongs to based on name and VRAM."""
     for t in GPU_TIERS:
@@ -170,43 +157,62 @@ def tier_for_gpu(gpu_name: str, vram_gb: float) -> GpuTier | None:
     return None
 
 
+def _patterns_for_segment(
+    segment: str,
+    vram_min: float | None = None,
+    vram_max: float | None = None,
+) -> tuple[str, ...]:
+    """Collect GPU name patterns from all tiers matching a segment and VRAM range."""
+    patterns: list[str] = []
+    for t in GPU_TIERS:
+        if t.category != segment:
+            continue
+        # Skip tiers whose VRAM range doesn't overlap with the requested range
+        if vram_min is not None and t.vram_max <= vram_min:
+            continue
+        if vram_max is not None and t.vram_min >= vram_max:
+            continue
+        patterns.extend(t.gpu_patterns)
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for p in patterns:
+        if p not in seen:
+            seen.add(p)
+            unique.append(p)
+    return tuple(unique)
+
+
 def resolve_query(
     *,
     gpu_type: str | None = None,
+    segment: str | None = None,
     vram_min: float | None = None,
     vram_max: float | None = None,
-    tier: str | None = None,
-    default_tier: str = DEFAULT_TIER,
+    default_segment: str = DEFAULT_SEGMENT,
+    default_min_vram: float = DEFAULT_MIN_VRAM,
 ) -> GpuQuery:
     """Convert raw CLI inputs into a GpuQuery.
 
-    Priority: --gpu > --tier > --vram-min/--vram-max > default_tier.
+    Priority: --gpu > --segment/--min-vram/--max-vram > defaults.
     """
     if gpu_type:
         return GpuQuery(gpu_type=gpu_type)
 
-    if tier:
-        t = tier_for_name(tier)
-        if t:
-            return GpuQuery(
-                tier=t.name, vram_min=t.vram_min, vram_max=t.vram_max,
-                gpu_patterns=t.gpu_patterns,
-            )
-        # Unknown tier name — treat as GPU type
-        return GpuQuery(gpu_type=tier)
-
-    if vram_min is not None or vram_max is not None:
-        return GpuQuery(vram_min=vram_min, vram_max=vram_max)
-
-    # Default: use default tier
-    t = tier_for_name(default_tier)
-    if t:
+    if segment is not None or vram_min is not None or vram_max is not None:
+        seg = segment.lower() if segment else None
+        patterns = _patterns_for_segment(seg, vram_min, vram_max) if seg else None
         return GpuQuery(
-            tier=t.name, vram_min=t.vram_min, vram_max=t.vram_max,
-            gpu_patterns=t.gpu_patterns,
+            segment=seg,
+            vram_min=vram_min,
+            vram_max=vram_max,
+            gpu_patterns=patterns or None,
         )
 
+    # Default: use default segment + min_vram
+    patterns = _patterns_for_segment(default_segment, default_min_vram)
     return GpuQuery(
-        tier=DEFAULT_TIER, vram_min=80, vram_max=140,
-        gpu_patterns=("A100", "H100"),
+        segment=default_segment,
+        vram_min=default_min_vram,
+        gpu_patterns=patterns or None,
     )

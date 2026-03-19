@@ -68,7 +68,9 @@ Arguments:
 Options:
   --num, -n           Number of experiment runs (default: 1)
   --gpu, -g           Specific GPU type (e.g. H100, RTX 4090)
-  --tier, -t          GPU tier (e.g. datacenter-80gb+, consumer-16gb+)
+  --segment, -s       GPU segment (consumer, workstation, datacenter)
+  --min-vram          Minimum VRAM in GB (e.g. 80)
+  --max-vram          Maximum VRAM in GB
   --provider, -p      Provider filter (e.g. runpod, vastai, primeintellect, lambdalabs)
   --region            Region filter (e.g. US, EU)
   --resume, -r        Resume a previous session
@@ -77,17 +79,15 @@ Options:
   --multi-gpu         Include multi-GPU instances
   --auto              Auto-select cheapest offer, no prompts
 
-GPU Tiers:
-  consumer-16gb+      RTX 3090, RTX 4090, RTX 5090
-  workstation-16gb+   RTX 2000/4000 Ada, A4000, A5000
-  workstation-48gb+   RTX 6000 Ada, A6000, RTX PRO 6000
-  datacenter-24gb+    L4
-  datacenter-40gb+    A40, L40/L40S, A100 40GB
-  datacenter-80gb+    A100 80GB, H100 (default)
-  datacenter-140gb+   H200, GH200, B200, B300
+GPU Segments:
+  consumer            RTX 3090, RTX 4090, RTX 5090
+  workstation         RTX 2000/4000 Ada, A4000, A5000, RTX 6000 Ada, A6000
+  datacenter          L4, A40, L40/L40S, A100, H100, H200, B200, B300
 
-autofoundry config                          Configure provider API keys
-autofoundry inventory [-g GPU] [-t TIER]    Browse GPU inventory
+Default: --segment datacenter --min-vram 80
+
+autofoundry config                                          Configure provider API keys
+autofoundry inventory [-g GPU] [-s SEGMENT] [--min-vram N]  Browse GPU inventory
 autofoundry volumes list                    List network volumes
 autofoundry volumes create [--name] [--provider] [--size] [--region]
                                             Create a new network volume

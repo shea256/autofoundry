@@ -12,7 +12,13 @@ from rich.prompt import IntPrompt, Prompt
 
 from autofoundry import __version__
 from autofoundry.config import Config, first_run_setup
-from autofoundry.gpu_filter import DEFAULT_TIER, GPU_TIERS, GpuQuery, resolve_query
+from autofoundry.gpu_filter import (
+    DEFAULT_MIN_VRAM,
+    DEFAULT_SEGMENT,
+    GPU_TIERS,
+    GpuQuery,
+    resolve_query,
+)
 from autofoundry.models import Session, SessionStatus
 from autofoundry.state import SessionStore
 from autofoundry.theme import (
@@ -127,27 +133,37 @@ def _prompt_session_params(
     console.print()
 
     # GPU tier selection
-    gpu_query = _prompt_tier_selection(config.default_tier)
+    gpu_query = _prompt_tier_selection(config.default_segment, config.default_min_vram)
 
     return script_path, num_experiments, gpu_query
 
 
-def _prompt_tier_selection(default_tier: str = DEFAULT_TIER) -> GpuQuery:
+def _prompt_tier_selection(
+    default_segment: str = DEFAULT_SEGMENT,
+    default_min_vram: float | None = DEFAULT_MIN_VRAM,
+) -> GpuQuery:
     """Prompt user to select a GPU tier interactively.
 
     Shows numbered tier options grouped by category.
     """
-    console.print("  [af.label]GPU tier[/af.label]")
+    # Find the default tier index by matching segment + vram_min
     default_idx = 0
+    for i, tier in enumerate(GPU_TIERS):
+        if (
+            tier.category == default_segment
+            and default_min_vram is not None
+            and tier.vram_min <= default_min_vram < tier.vram_max
+        ):
+            default_idx = i + 1
+
+    console.print("  [af.label]GPU tier[/af.label]")
     current_category = ""
     for i, tier in enumerate(GPU_TIERS):
         if tier.category != current_category:
             current_category = tier.category
             console.print(f"    [af.secondary]{current_category.title()}[/af.secondary]")
-        marker = " [af.primary](default)[/af.primary]" if tier.name == default_tier else ""
+        marker = " [af.primary](default)[/af.primary]" if i + 1 == default_idx else ""
         console.print(f"      [af.muted]{i + 1}.[/af.muted] {tier.label}{marker}")
-        if tier.name == default_tier:
-            default_idx = i + 1
 
     console.print()
     console.print("    [af.muted]Or type a GPU name (e.g. H100)[/af.muted]")
@@ -161,11 +177,15 @@ def _prompt_tier_selection(default_tier: str = DEFAULT_TIER) -> GpuQuery:
         idx = int(pick) - 1
         if 0 <= idx < len(GPU_TIERS):
             selected = GPU_TIERS[idx]
-            return resolve_query(tier=selected.name)
+            return resolve_query(
+                segment=selected.category,
+                vram_min=selected.vram_min,
+                vram_max=selected.vram_max,
+            )
     except ValueError:
         pass
 
-    # Fallback: treat as GPU name or tier name
+    # Fallback: treat as GPU name
     return resolve_query(gpu_type=pick)
 
 
@@ -452,7 +472,9 @@ def run(
     resume: str = typer.Option(None, "--resume", "-r", help="Resume a previous operation"),
     num: int = typer.Option(None, "--num", "-n", help="Number of experiment runs"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type (e.g. H100)"),
-    tier: str = typer.Option(None, "--tier", "-t", help="GPU tier (e.g. datacenter-80gb+, consumer-16gb+)"),
+    segment: str = typer.Option(None, "--segment", "-s", help="GPU segment (consumer, workstation, datacenter)"),
+    min_vram: float = typer.Option(None, "--min-vram", help="Minimum VRAM in GB (e.g. 80)"),
+    max_vram: float = typer.Option(None, "--max-vram", help="Maximum VRAM in GB"),
     volume: str = typer.Option(None, "--volume", "-v", help="Network volume name (creates if needed)"),
     provider: str = typer.Option(None, "--provider", "-p", help="Provider filter (e.g. primeintellect, vastai)"),
     region: str = typer.Option(None, "--region", help="Region filter (e.g. US, EU)"),
@@ -467,7 +489,9 @@ def run(
             ("--resume, -r TEXT", "Resume a previous operation"),
             ("--num, -n INTEGER", "Number of experiment runs"),
             ("--gpu, -g TEXT", "GPU type (e.g. H100)"),
-            ("--tier, -t TEXT", "GPU tier (e.g. datacenter-80gb+, consumer-16gb+)"),
+            ("--segment, -s TEXT", "GPU segment (consumer, workstation, datacenter)"),
+            ("--min-vram FLOAT", "Minimum VRAM in GB (e.g. 80)"),
+            ("--max-vram FLOAT", "Maximum VRAM in GB"),
             ("--volume, -v TEXT", "Network volume name (creates if needed)"),
             ("--provider, -p TEXT", "Provider filter (e.g. primeintellect, vastai)"),
             ("--region TEXT", "Region filter (e.g. US, EU, secure, community)"),
@@ -608,7 +632,10 @@ def run(
         script_path = _resolve_script(script, config)
         num_experiments = num if num is not None else 1
         gpu_query = resolve_query(
-            gpu_type=gpu, tier=tier, default_tier=config.default_tier,
+            gpu_type=gpu, segment=segment,
+            vram_min=min_vram, vram_max=max_vram,
+            default_segment=config.default_segment,
+            default_min_vram=config.default_min_vram or DEFAULT_MIN_VRAM,
         )
         if multi_gpu:
             gpu_query.single_gpu = False
@@ -620,8 +647,8 @@ def run(
             num_experiments = num
         if gpu:
             gpu_query = resolve_query(gpu_type=gpu)
-        elif tier:
-            gpu_query = resolve_query(tier=tier)
+        elif segment is not None or min_vram is not None or max_vram is not None:
+            gpu_query = resolve_query(segment=segment, vram_min=min_vram, vram_max=max_vram)
         gpu_type = gpu_query.description
         if multi_gpu:
             gpu_query.single_gpu = False
@@ -1020,14 +1047,18 @@ def volumes_create(
 def inventory(
     help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
     gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type to filter (e.g. H100)"),
-    tier: str = typer.Option(None, "--tier", "-t", help="GPU tier (e.g. datacenter-80gb+, consumer-16gb+)"),
+    segment: str = typer.Option(None, "--segment", "-s", help="GPU segment (consumer, workstation, datacenter)"),
+    min_vram: float = typer.Option(None, "--min-vram", help="Minimum VRAM in GB (e.g. 80)"),
+    max_vram: float = typer.Option(None, "--max-vram", help="Maximum VRAM in GB"),
     multi_gpu: bool = typer.Option(False, "--multi-gpu", help="Include multi-GPU instances"),
 ) -> None:
     """Browse GPU inventory across all configured supply lines."""
     if help_:
         _print_command_help("autofoundry inventory", "Browse GPU inventory across supply lines", [
             ("--gpu, -g TEXT", "GPU type to filter (e.g. H100)"),
-            ("--tier, -t TEXT", "GPU tier (e.g. datacenter-80gb+, consumer-16gb+)"),
+            ("--segment, -s TEXT", "GPU segment (consumer, workstation, datacenter)"),
+            ("--min-vram FLOAT", "Minimum VRAM in GB (e.g. 80)"),
+            ("--max-vram FLOAT", "Maximum VRAM in GB"),
             ("--multi-gpu", "Include multi-GPU instances"),
             ("--help, -h", "Show this help"),
         ])
@@ -1039,10 +1070,10 @@ def inventory(
 
     if gpu:
         query = resolve_query(gpu_type=gpu)
-    elif tier:
-        query = resolve_query(tier=tier)
+    elif segment is not None or min_vram is not None or max_vram is not None:
+        query = resolve_query(segment=segment, vram_min=min_vram, vram_max=max_vram)
     else:
-        query = _prompt_tier_selection(config.default_tier)
+        query = _prompt_tier_selection(config.default_segment, config.default_min_vram)
 
     if multi_gpu:
         query.single_gpu = False

@@ -1,14 +1,14 @@
 """Tests for GPU tier filtering and name matching."""
 
 from autofoundry.gpu_filter import (
-    DEFAULT_TIER,
+    DEFAULT_MIN_VRAM,
+    DEFAULT_SEGMENT,
     GPU_TIERS,
     GpuQuery,
     filter_by_vram,
     gpu_name_matches,
     resolve_query,
     tier_for_gpu,
-    tier_for_name,
 )
 from autofoundry.models import GpuOffer, ProviderName
 
@@ -30,8 +30,9 @@ class TestGpuTiers:
     def test_seven_tiers_defined(self):
         assert len(GPU_TIERS) == 7
 
-    def test_default_tier(self):
-        assert DEFAULT_TIER == "datacenter-80gb+"
+    def test_defaults(self):
+        assert DEFAULT_SEGMENT == "datacenter"
+        assert DEFAULT_MIN_VRAM == 80.0
 
     def test_all_tiers_have_patterns(self):
         for t in GPU_TIERS:
@@ -44,28 +45,6 @@ class TestGpuTiers:
     def test_tier_names_unique(self):
         names = [t.name for t in GPU_TIERS]
         assert len(names) == len(set(names))
-
-
-class TestTierLookup:
-    def test_tier_for_name(self):
-        t = tier_for_name("datacenter-80gb+")
-        assert t is not None
-        assert t.vram_min == 80
-        assert t.vram_max == 140
-
-    def test_tier_for_name_case_insensitive(self):
-        assert tier_for_name("Datacenter-80GB+") is not None
-
-    def test_tier_for_name_unknown(self):
-        assert tier_for_name("999gb+") is None
-
-    def test_old_tier_name_migration(self):
-        """Old VRAM-only tier names should resolve to new tiers."""
-        assert tier_for_name("80gb+").name == "datacenter-80gb+"
-        assert tier_for_name("140gb+").name == "datacenter-140gb+"
-        assert tier_for_name("48gb+").name == "workstation-48gb+"
-        assert tier_for_name("<24gb").name == "consumer-16gb+"
-        assert tier_for_name("24gb+").name == "datacenter-24gb+"
 
 
 class TestTierForGpu:
@@ -189,46 +168,56 @@ class TestFilterByVram:
 
 class TestResolveQuery:
     def test_gpu_type_takes_priority(self):
-        q = resolve_query(gpu_type="H100", tier="datacenter-40gb+")
+        q = resolve_query(gpu_type="H100", segment="datacenter", vram_min=40)
         assert q.gpu_type == "H100"
-        assert q.tier is None
+        assert q.segment is None
 
-    def test_tier_sets_vram_bounds_and_patterns(self):
-        q = resolve_query(tier="datacenter-80gb+")
-        assert q.tier == "datacenter-80gb+"
+    def test_segment_with_vram(self):
+        q = resolve_query(segment="datacenter", vram_min=80)
+        assert q.segment == "datacenter"
         assert q.vram_min == 80
-        assert q.vram_max == 140
-        assert q.gpu_patterns == ("A100", "H100")
+        assert "A100" in q.gpu_patterns
+        assert "H100" in q.gpu_patterns
 
-    def test_unknown_tier_treated_as_gpu_type(self):
-        q = resolve_query(tier="RTX4090")
-        assert q.gpu_type == "RTX4090"
+    def test_segment_alone(self):
+        q = resolve_query(segment="datacenter")
+        assert q.segment == "datacenter"
+        assert q.vram_min is None
+        # Should include patterns from all datacenter tiers
+        assert "L4" in q.gpu_patterns
+        assert "H100" in q.gpu_patterns
 
-    def test_explicit_vram_range(self):
-        q = resolve_query(vram_min=40, vram_max=100)
-        assert q.vram_min == 40
-        assert q.vram_max == 100
-        assert q.tier is None
+    def test_vram_alone(self):
+        q = resolve_query(vram_min=80)
+        assert q.vram_min == 80
+        assert q.segment is None
         assert q.gpu_patterns is None
 
-    def test_default_tier(self):
+    def test_default_query(self):
         q = resolve_query()
-        assert q.tier == "datacenter-80gb+"
+        assert q.segment == "datacenter"
         assert q.vram_min == 80
-        assert q.vram_max == 140
-        assert q.gpu_patterns == ("A100", "H100")
+        assert "A100" in q.gpu_patterns
+        assert "H100" in q.gpu_patterns
 
-    def test_custom_default_tier(self):
-        q = resolve_query(default_tier="datacenter-40gb+")
-        assert q.tier == "datacenter-40gb+"
-        assert q.vram_min == 40
-        assert q.vram_max == 80
+    def test_custom_defaults(self):
+        q = resolve_query(default_segment="workstation", default_min_vram=48)
+        assert q.segment == "workstation"
+        assert q.vram_min == 48
 
-    def test_old_tier_name_resolves(self):
-        """Old tier names like '80gb+' should still work via migration."""
-        q = resolve_query(tier="80gb+")
-        assert q.tier == "datacenter-80gb+"
-        assert q.gpu_patterns == ("A100", "H100")
+    def test_segment_filters_patterns(self):
+        """Only patterns from matching segment should be included."""
+        q = resolve_query(segment="consumer")
+        assert q.segment == "consumer"
+        assert "RTX 4090" in q.gpu_patterns
+        assert "H100" not in q.gpu_patterns
+
+    def test_segment_with_vram_filters_tiers(self):
+        """VRAM range should exclude tiers that don't overlap."""
+        q = resolve_query(segment="datacenter", vram_min=80)
+        # Should not include L4 (24-40GB range) or A40 (40-80GB range)
+        assert "L4" not in q.gpu_patterns
+        assert "A40" not in q.gpu_patterns
 
 
 class TestGpuQueryDescription:
@@ -236,9 +225,14 @@ class TestGpuQueryDescription:
         q = GpuQuery(gpu_type="H100")
         assert q.description == "H100"
 
-    def test_tier_description(self):
-        q = resolve_query(tier="datacenter-80gb+")
+    def test_segment_description(self):
+        q = GpuQuery(segment="datacenter", vram_min=80)
+        assert "Datacenter" in q.description
         assert "80GB+" in q.description
+
+    def test_segment_only_description(self):
+        q = GpuQuery(segment="datacenter")
+        assert q.description == "Datacenter"
 
     def test_vram_range_description(self):
         q = GpuQuery(vram_min=40, vram_max=100)
