@@ -105,7 +105,7 @@ autofoundry results
 autofoundry teardown <session-id>
 ```
 
-See the [guides](docs/README.md) for writing experiment scripts, network volumes, resuming sessions, custom images, CLI reference, and architecture details.
+See the [full documentation](docs/README.md) for writing experiment scripts, network volumes, resuming sessions, custom images, CLI reference, and architecture details.
 
 ## Requirements
 
