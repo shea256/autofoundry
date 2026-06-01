@@ -154,6 +154,43 @@ autofoundry run train.sh --volume my-data --provider runpod
 autofoundry run --resume <session-id>
 ```
 
+### `autofoundry instance`
+
+Lower-level instance lifecycle commands. These use the same operation/session store as
+`autofoundry run`, so manually provisioned instances still appear in `autofoundry status`.
+
+```
+Commands:
+  up [TARGET]            Provision new instances, or restart a stopped target
+  run TARGET SCRIPT      Run a script on existing instances
+  stop TARGET            Stop instances and preserve disk where supported
+  terminate TARGET       Delete instances
+  status [TARGET]        Show instance status
+```
+
+`TARGET` can be an operation ID, instance ID/prefix, or instance name.
+
+**Examples:**
+
+```bash
+# Provision one instance without running an experiment
+autofoundry instance up --gpu H100 --provider runpod --auto
+
+# Provision several instances
+autofoundry instance up --gpu A100 --num 4 --auto
+
+# Run a script on all instances in an operation
+autofoundry instance run op-12 train.sh
+
+# Stop and restart instances
+autofoundry instance stop op-12
+autofoundry instance up op-12
+
+# Inspect or delete a single instance
+autofoundry instance status pod-abc123
+autofoundry instance terminate pod-abc123
+```
+
 ### `autofoundry inventory`
 
 Browse available GPU offers across all configured providers.

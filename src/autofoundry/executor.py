@@ -9,10 +9,10 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07|\r")
-
 from autofoundry.models import InstanceInfo, SshConnectionInfo
 from autofoundry.theme import TERMS, console, print_error, print_success
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07|\r")
 
 
 @dataclass
@@ -230,6 +230,38 @@ def execute_experiment(
         print_error(f"{unit_label} {exp_label} failed (exit {exit_code})")
 
     return run
+
+
+def run_script_on_instances(
+    instances: list[InstanceInfo],
+    script_path: str,
+    ssh_key_path: str,
+) -> list[ExperimentRun]:
+    """Run one ad hoc script invocation on each instance in parallel."""
+    runs: list[ExperimentRun] = []
+    lock = threading.Lock()
+
+    def run_one(instance: InstanceInfo, unit_num: int) -> None:
+        result = execute_experiment(
+            instance=instance,
+            experiment_index=0,
+            script_path=script_path,
+            ssh_key_path=ssh_key_path,
+            unit_num=unit_num,
+        )
+        with lock:
+            runs.append(result)
+
+    threads = []
+    for idx, instance in enumerate(instances, 1):
+        t = threading.Thread(target=run_one, args=(instance, idx))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+
+    return runs
 
 
 def run_all_experiments(

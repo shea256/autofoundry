@@ -18,16 +18,17 @@ class TestCLIHelp:
         assert "config" in result.output
         assert "run" in result.output
         assert "volumes" in result.output
+        assert "instance" in result.output
 
     def test_no_build_command(self) -> None:
         """build command should no longer exist."""
         result = runner.invoke(app, ["build", "--help"])
         assert result.exit_code != 0
 
-    def test_no_image_flag_on_run(self) -> None:
-        """--image flag should no longer exist on run."""
+    def test_image_flag_on_run(self) -> None:
+        """--image flag should be present on run."""
         result = runner.invoke(app, ["run", "--help"])
-        assert "--image" not in result.output
+        assert "--image" in result.output
 
     def test_volume_flag_on_run(self) -> None:
         """--volume flag should be present on run."""
@@ -97,6 +98,24 @@ class TestVolumesCommand:
         assert "No volumes found" in result.output
 
 
+class TestInstanceCommand:
+    def test_bare_instance_shows_subcommands(self) -> None:
+        result = runner.invoke(app, ["instance"])
+        assert result.exit_code == 0
+        assert "up" in result.output
+        assert "run" in result.output
+        assert "stop" in result.output
+        assert "terminate" in result.output
+        assert "status" in result.output
+
+    def test_instance_up_help(self) -> None:
+        result = runner.invoke(app, ["instance", "up", "--help"])
+        assert result.exit_code == 0
+        assert "--gpu" in result.output
+        assert "--provider" in result.output
+        assert "--num" in result.output
+
+
 class TestVolumesCreateCommand:
     def test_create_runpod_volume_all_flags(self) -> None:
         mock_config = MagicMock()
@@ -163,7 +182,7 @@ class TestResolveVolume:
                 mock_config, "my-vol", {ProviderName.RUNPOD}
             )
 
-        assert result == "vol-123"
+        assert result == ("vol-123", "US-TX-3", "runpod")
 
     def test_unsupported_provider_returns_empty(self) -> None:
         from autofoundry.cli import _resolve_volume
@@ -172,7 +191,7 @@ class TestResolveVolume:
         result = _resolve_volume(
             mock_config, "my-vol", {ProviderName.PRIMEINTELLECT}
         )
-        assert result == ""
+        assert result == ("", "", "")
 
     def test_no_volume_support_returns_empty(self) -> None:
         from autofoundry.cli import _resolve_volume
@@ -187,4 +206,4 @@ class TestResolveVolume:
                 mock_config, "my-vol", {ProviderName.RUNPOD}
             )
 
-        assert result == ""
+        assert result == ("", "", "")

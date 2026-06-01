@@ -19,7 +19,7 @@ from autofoundry.gpu_filter import (
     GpuQuery,
     resolve_query,
 )
-from autofoundry.models import Session, SessionStatus
+from autofoundry.models import InstanceInfo, InstanceStatus, Session, SessionStatus
 from autofoundry.state import SessionStore
 from autofoundry.theme import (
     TERMS,
@@ -55,6 +55,7 @@ def _default(
         console.print("    [af.secondary]config[/af.secondary]    Configure API keys, SSH key, and default GPU type")
         console.print("    [af.secondary]inventory[/af.secondary] Browse GPU inventory across supply lines")
         console.print("    [af.secondary]volumes[/af.secondary]   Manage network volumes (list, create)")
+        console.print("    [af.secondary]instance[/af.secondary]  Manage GPU instances directly")
         console.print("    [af.secondary]run[/af.secondary]       Launch GPU experiment orchestration engine")
         console.print("    [af.secondary]status[/af.secondary]    Show status of operations and instances")
         console.print("    [af.secondary]results[/af.secondary]   View experiment results and metrics")
@@ -245,9 +246,9 @@ def _create_volume_interactive(
     provider_name, provider, volume_name: str | None = None,
 ) -> str:
     """Prompt for volume details and create it. Returns volume_id or empty string."""
-    from autofoundry.models import ProviderName
-
     from rich.prompt import Confirm as RichConfirm
+
+    from autofoundry.models import ProviderName
 
     if not volume_name:
         volume_name = Prompt.ask("  [af.label]Volume name[/af.label]")
@@ -462,6 +463,146 @@ def _print_command_help(command: str, description: str, options: list[tuple[str,
     for flags, desc in options:
         console.print(f"    [af.secondary]{flags:<24}[/af.secondary] {desc}")
     console.print()
+
+
+def _iter_instance_records() -> list[tuple[str, InstanceInfo]]:
+    """Return all stored instances with their operation IDs."""
+    records: list[tuple[str, InstanceInfo]] = []
+    for session_id in SessionStore.list_sessions():
+        store = SessionStore(session_id)
+        try:
+            records.extend((session_id, inst) for inst in store.get_instances())
+        finally:
+            store.close()
+    return records
+
+
+def _resolve_instance_records(
+    target: str | None,
+    *,
+    allow_all: bool = False,
+) -> list[tuple[str, InstanceInfo]]:
+    """Resolve a session ID, instance ID/prefix, or instance name to stored instances."""
+    sessions = SessionStore.list_sessions()
+    if not sessions:
+        console.print("  [af.muted]No operations found.[/af.muted]")
+        raise typer.Exit(1)
+
+    if target is None:
+        if allow_all:
+            records = _iter_instance_records()
+            if not records:
+                console.print("  [af.muted]No instances found.[/af.muted]")
+                raise typer.Exit(1)
+            return records
+        print_error("TARGET is required")
+        raise typer.Exit(1)
+
+    if target in sessions:
+        store = SessionStore(target)
+        try:
+            instances = store.get_instances()
+        finally:
+            store.close()
+        if not instances:
+            console.print("  [af.muted]No instances found for this operation.[/af.muted]")
+            raise typer.Exit(1)
+        return [(target, inst) for inst in instances]
+
+    records = _iter_instance_records()
+    exact = [
+        (sid, inst) for sid, inst in records
+        if inst.instance_id == target or inst.name == target
+    ]
+    matches = exact or [
+        (sid, inst) for sid, inst in records
+        if inst.instance_id.startswith(target) or inst.name.startswith(target)
+    ]
+
+    if not matches:
+        print_error(f"Instance target '{target}' not found")
+        raise typer.Exit(1)
+    if len(matches) > 1:
+        print_error(f"Instance target '{target}' is ambiguous")
+        for sid, inst in matches[:10]:
+            print_status(sid, f"{inst.name} — {inst.instance_id}")
+        raise typer.Exit(1)
+
+    return matches
+
+
+def _group_instance_records(
+    records: list[tuple[str, InstanceInfo]],
+) -> dict[str, list[InstanceInfo]]:
+    """Group instance records by operation ID."""
+    grouped: dict[str, list[InstanceInfo]] = {}
+    for session_id, instance in records:
+        grouped.setdefault(session_id, []).append(instance)
+    return grouped
+
+
+def _refresh_instance_records(
+    config: Config,
+    records: list[tuple[str, InstanceInfo]],
+) -> list[tuple[str, InstanceInfo]]:
+    """Refresh stored instance status from providers."""
+    from autofoundry.providers import get_provider
+
+    refreshed: list[tuple[str, InstanceInfo]] = []
+    for session_id, instance in records:
+        try:
+            provider = get_provider(instance.provider, config.api_keys[instance.provider])
+            current = provider.get_instance(instance.instance_id)
+            store = SessionStore(session_id)
+            try:
+                store.update_instance_status(instance.instance_id, current.status)
+                if current.ssh:
+                    store.update_instance_ssh(instance.instance_id, current.ssh)
+            finally:
+                store.close()
+            refreshed.append((session_id, current))
+        except Exception as e:
+            print_error(f"Failed to refresh {instance.name or instance.instance_id}: {e}")
+            refreshed.append((session_id, instance))
+    return refreshed
+
+
+def _print_instance_records(records: list[tuple[str, InstanceInfo]]) -> None:
+    """Print a table of instances."""
+    from autofoundry.config import PROVIDER_DISPLAY
+    from autofoundry.theme import make_table
+
+    table = make_table(f"{len(records)} {term('instances', len(records)).lower()}", [
+        ("Operation", "af.secondary"),
+        ("Instance", "af.primary"),
+        ("Provider", ""),
+        ("GPU", ""),
+        ("Status", ""),
+        ("SSH", "af.muted"),
+        ("Name", "af.muted"),
+    ])
+    for session_id, inst in records:
+        ssh = f"{inst.ssh.host}:{inst.ssh.port}" if inst.ssh else "—"
+        table.add_row(
+            session_id,
+            inst.instance_id,
+            PROVIDER_DISPLAY.get(inst.provider, inst.provider.value),
+            inst.gpu_type,
+            display_status(inst.status.value),
+            ssh,
+            inst.name,
+        )
+    console.print(table)
+    console.print()
+
+
+def _scale_plan_instances(plan, count: int) -> None:
+    """Set the first selected offer count to the requested instance count."""
+    if count <= 1 or not plan.offers:
+        return
+    if len(plan.offers) == 1:
+        offer, _ = plan.offers[0]
+        plan.offers = [(offer, count)]
 
 
 @app.command(context_settings={"help_option_names": []})
@@ -750,7 +891,7 @@ def run(
                 store.update_session_status(SessionStatus.FAILED)
             else:
                 console.print(
-                    f"  [af.muted]Instances kept. Use 'autofoundry teardown' to clean up.[/af.muted]"
+                    "  [af.muted]Instances kept. Use 'autofoundry teardown' to clean up.[/af.muted]"
                 )
                 store.update_session_status(SessionStatus.PAUSED)
         else:
@@ -836,6 +977,397 @@ def run(
         print_status("Resume", f"autofoundry run --resume {session_id}")
 
     store.close()
+
+
+instance_app = typer.Typer(
+    add_completion=False,
+    pretty_exceptions_enable=False,
+    invoke_without_command=True,
+)
+app.add_typer(instance_app, name="instance")
+
+
+@instance_app.callback(context_settings={"help_option_names": []})
+def _instance_default(
+    ctx: typer.Context,
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """Manage GPU instances directly."""
+    if help_ or ctx.invoked_subcommand is None:
+        print_banner(version=__version__)
+        console.print()
+        console.print(
+            "  [af.primary]autofoundry instance[/af.primary] — "
+            "[af.muted]Manage GPU instances directly[/af.muted]"
+        )
+        console.print()
+        console.print("  [af.muted]COMMANDS:[/af.muted]")
+        console.print("    [af.secondary]up[/af.secondary]          Provision or restart instances")
+        console.print(
+            "    [af.secondary]run[/af.secondary]         Run a script on existing instances"
+        )
+        console.print(
+            "    [af.secondary]stop[/af.secondary]        Stop instances and preserve disk"
+        )
+        console.print("    [af.secondary]terminate[/af.secondary]   Delete instances")
+        console.print("    [af.secondary]status[/af.secondary]      Show instance status")
+        console.print()
+        if help_:
+            raise typer.Exit()
+
+
+@instance_app.command("up", context_settings={"help_option_names": []})
+def instance_up(
+    target: str = typer.Argument(None, help="Operation or instance target to restart"),
+    num: int = typer.Option(1, "--num", "-n", help="Number of instances to provision"),
+    gpu: str = typer.Option(None, "--gpu", "-g", help="GPU type (e.g. H100)"),
+    segment: str = typer.Option(None, "--segment", "-s", help="GPU segment"),
+    min_vram: float = typer.Option(None, "--min-vram", help="Minimum VRAM in GB"),
+    max_vram: float = typer.Option(None, "--max-vram", help="Maximum VRAM in GB"),
+    volume: str = typer.Option(None, "--volume", "-v", help="Network volume name"),
+    provider: str = typer.Option(None, "--provider", "-p", help="Provider filter"),
+    region: str = typer.Option(None, "--region", help="Region filter"),
+    image: str = typer.Option(None, "--image", "-i", help="Docker image override"),
+    multi_gpu: bool = typer.Option(False, "--multi-gpu", help="Include multi-GPU instances"),
+    auto: bool = typer.Option(False, "--auto", help="Auto-select cheapest offer, no prompts"),
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """Provision new instances or restart existing stopped instances."""
+    if help_:
+        _print_command_help("autofoundry instance up", "Provision or restart GPU instances", [
+            ("[TARGET]", "Operation or instance target to restart"),
+            ("--num, -n INTEGER", "Number of instances to provision"),
+            ("--gpu, -g TEXT", "GPU type (e.g. H100)"),
+            ("--segment, -s TEXT", "GPU segment (consumer, workstation, datacenter)"),
+            ("--min-vram FLOAT", "Minimum VRAM in GB"),
+            ("--max-vram FLOAT", "Maximum VRAM in GB"),
+            ("--volume, -v TEXT", "Network volume name (creates if needed)"),
+            ("--provider, -p TEXT", "Provider filter"),
+            ("--region TEXT", "Region filter"),
+            ("--image, -i TEXT", "Docker image override"),
+            ("--multi-gpu", "Include multi-GPU instances"),
+            ("--auto", "Auto-select cheapest offer, no prompts"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+
+    print_banner(version=__version__)
+    config = _load_or_setup_config()
+
+    if target:
+        from autofoundry.provisioner import restart_instances
+
+        records = _resolve_instance_records(target)
+        live_records: list[tuple[str, InstanceInfo]] = []
+        for session_id, instances in _group_instance_records(records).items():
+            store = SessionStore(session_id)
+            try:
+                live = restart_instances(config, instances, store)
+                if live:
+                    store.update_session_status(SessionStatus.RUNNING)
+                    live_records.extend((session_id, inst) for inst in live)
+            finally:
+                store.close()
+        if live_records:
+            _print_instance_records(live_records)
+        return
+
+    if num < 1:
+        print_error("--num must be at least 1")
+        raise typer.Exit(1)
+
+    if auto:
+        gpu_query = resolve_query(
+            gpu_type=gpu,
+            segment=segment,
+            vram_min=min_vram,
+            vram_max=max_vram,
+            default_segment=config.default_segment,
+            default_min_vram=config.default_min_vram or DEFAULT_MIN_VRAM,
+        )
+    else:
+        gpu_query = _prompt_tier_selection(config.default_segment, config.default_min_vram)
+        if gpu:
+            gpu_query = resolve_query(gpu_type=gpu)
+        elif segment is not None or min_vram is not None or max_vram is not None:
+            gpu_query = resolve_query(segment=segment, vram_min=min_vram, vram_max=max_vram)
+    if multi_gpu:
+        gpu_query.single_gpu = False
+
+    session_id = config.next_operation_id
+    config.save()
+    session = Session(
+        session_id=session_id,
+        status=SessionStatus.PLANNING,
+        script_path="",
+        total_experiments=0,
+        gpu_type=gpu_query.description,
+    )
+    store = SessionStore(session_id)
+    store.create_session(session)
+    store.log_event("instance_up_created", {"gpu_type": gpu_query.description, "num": num})
+
+    _show_session_summary(session)
+
+    volume_id = ""
+    volume_region = ""
+    provider_filter = provider
+    region_filter = region
+    if volume:
+        console.print()
+        volume_id, volume_region, vol_pname = _resolve_volume(config, volume)
+        if volume_id:
+            provider_filter = vol_pname
+            console.print()
+
+    if auto:
+        from autofoundry.planner import auto_plan
+        plan = auto_plan(
+            config,
+            gpu_query,
+            0,
+            "",
+            provider_filter=provider_filter,
+            region_filter=region_filter,
+            datacenter_id=volume_region or None,
+            instance_count=num,
+        )
+    else:
+        from autofoundry.planner import interactive_plan
+        plan = interactive_plan(
+            config,
+            gpu_query,
+            0,
+            "",
+            provider_filter=provider_filter,
+            region_filter=region_filter,
+            datacenter_id=volume_region or None,
+        )
+
+    if plan is None:
+        store.update_session_status(SessionStatus.FAILED)
+        store.close()
+        raise typer.Exit(1)
+
+    if not auto:
+        _scale_plan_instances(plan, num)
+    store.update_session_status(SessionStatus.PROVISIONING)
+
+    from autofoundry.provisioner import provision_instances
+
+    try:
+        instances = provision_instances(
+            config,
+            plan,
+            session_id,
+            store,
+            gpu_type_filter=gpu_query.description,
+            volume_id=volume_id,
+            volume_region=volume_region,
+            image_override=image,
+        )
+    except KeyboardInterrupt:
+        console.print()
+        store.update_session_status(SessionStatus.PAUSED)
+        store.close()
+        raise typer.Exit(1)
+
+    if not instances:
+        print_error("No instances came online.")
+        store.update_session_status(SessionStatus.FAILED)
+        store.close()
+        raise typer.Exit(1)
+
+    store.update_session_status(SessionStatus.RUNNING)
+    store.close()
+    print_success(f"Operation {session_id} is running")
+    print_status("Status", f"autofoundry instance status {session_id}")
+
+
+@instance_app.command("run", context_settings={"help_option_names": []})
+def instance_run(
+    target: str = typer.Argument(None, help="Operation or instance target"),
+    script: str = typer.Argument(None, help="Path to the script to run"),
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """Run a script on existing instances."""
+    if help_:
+        _print_command_help("autofoundry instance run", "Run a script on existing instances", [
+            ("TARGET", "Operation, instance ID/prefix, or instance name"),
+            ("SCRIPT", "Path to the script to run"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    if target is None or script is None:
+        print_error("TARGET and SCRIPT are required")
+        raise typer.Exit(1)
+
+    print_banner(version=__version__)
+    config = _load_or_setup_config()
+    script_path = _resolve_script(script, config)
+    records = _refresh_instance_records(config, _resolve_instance_records(target))
+    instances = [inst for _, inst in records if inst.status == InstanceStatus.RUNNING and inst.ssh]
+
+    if not instances:
+        print_error(
+            "No running instances with SSH info found. "
+            "Use 'autofoundry instance up TARGET' first."
+        )
+        raise typer.Exit(1)
+
+    print_header(TERMS["experiment"])
+    console.print()
+    console.print(
+        f"  [af.primary]Running script on {len(instances)} "
+        f"{term('instances', len(instances)).lower()}...[/af.primary]"
+    )
+    console.print()
+
+    from autofoundry.executor import run_script_on_instances
+
+    runs = run_script_on_instances(instances, script_path, config.ssh_key_path)
+    failed = sum(1 for run in runs if run.exit_code != 0)
+    if failed:
+        print_error(f"{failed} {term('experiments', failed).lower()} failed")
+        raise typer.Exit(1)
+    print_success("Script completed")
+
+
+@instance_app.command("stop", context_settings={"help_option_names": []})
+def instance_stop(
+    target: str = typer.Argument(None, help="Operation or instance target"),
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """Stop instances while preserving disk where supported."""
+    if help_:
+        _print_command_help("autofoundry instance stop", "Stop instances and preserve disk", [
+            ("TARGET", "Operation, instance ID/prefix, or instance name"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    if target is None:
+        print_error("TARGET is required")
+        raise typer.Exit(1)
+
+    from autofoundry.providers import get_provider
+
+    print_banner(version=__version__)
+    config = _load_or_setup_config()
+    records = _resolve_instance_records(target)
+    stopped = 0
+
+    for session_id, instance in records:
+        provider_obj = get_provider(instance.provider, config.api_keys[instance.provider])
+        display = instance.provider.value
+        if not hasattr(provider_obj, "stop_instance"):
+            console.print(
+                f"  [af.muted]{instance.name} [{display}] stop unsupported; "
+                "leaving running[/af.muted]"
+            )
+            continue
+        try:
+            provider_obj.stop_instance(instance.instance_id)
+            store = SessionStore(session_id)
+            try:
+                store.update_instance_status(instance.instance_id, InstanceStatus.STOPPED)
+                store.update_session_status(SessionStatus.PAUSED)
+            finally:
+                store.close()
+            stopped += 1
+            print_success(f"{instance.name} [{display}] stopped")
+        except Exception as e:
+            print_error(f"Failed to stop {instance.name or instance.instance_id}: {e}")
+
+    if stopped:
+        print_status("Resume", f"autofoundry instance up {target}")
+
+
+@instance_app.command("terminate", context_settings={"help_option_names": []})
+def instance_terminate(
+    target: str = typer.Argument(None, help="Operation or instance target"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """Terminate and delete instances."""
+    if help_:
+        _print_command_help("autofoundry instance terminate", "Delete instances", [
+            ("TARGET", "Operation, instance ID/prefix, or instance name"),
+            ("--yes, -y", "Skip confirmation"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+    if target is None:
+        print_error("TARGET is required")
+        raise typer.Exit(1)
+
+    from rich.prompt import Confirm as RichConfirm
+
+    from autofoundry.providers import get_provider
+
+    print_banner(version=__version__)
+    config = _load_or_setup_config()
+    records = _resolve_instance_records(target)
+
+    console.print(
+        f"  [af.primary]{len(records)} {term('instances', len(records)).lower()} "
+        "to terminate:[/af.primary]"
+    )
+    for _, inst in records:
+        print_status(
+            inst.instance_id,
+            f"{inst.provider.value} {inst.gpu_type} "
+            f"[{display_status(inst.status.value)}]",
+        )
+    console.print()
+
+    if not yes and not RichConfirm.ask(
+        "  [af.alert]Confirm termination?[/af.alert]",
+        default=False,
+    ):
+        console.print("  [af.muted]Aborted.[/af.muted]")
+        return
+
+    for session_id, instance in records:
+        try:
+            provider_obj = get_provider(instance.provider, config.api_keys[instance.provider])
+            provider_obj.delete_instance(instance.instance_id)
+            store = SessionStore(session_id)
+            try:
+                store.update_instance_status(instance.instance_id, InstanceStatus.DELETED)
+                remaining = [
+                    inst for inst in store.get_instances()
+                    if inst.status != InstanceStatus.DELETED
+                ]
+                if not remaining:
+                    store.update_session_status(SessionStatus.COMPLETED)
+            finally:
+                store.close()
+            print_success(f"{instance.name} [{instance.provider.value}] terminated")
+        except Exception as e:
+            print_error(f"Failed to terminate {instance.name or instance.instance_id}: {e}")
+
+
+@instance_app.command("status", context_settings={"help_option_names": []})
+def instance_status(
+    target: str = typer.Argument(None, help="Operation or instance target"),
+    refresh: bool = typer.Option(False, "--refresh", help="Refresh provider status"),
+    help_: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+) -> None:
+    """Show instance status."""
+    if help_:
+        _print_command_help("autofoundry instance status", "Show instance status", [
+            ("[TARGET]", "Operation, instance ID/prefix, or instance name"),
+            ("--refresh", "Refresh provider status"),
+            ("--help, -h", "Show this help"),
+        ])
+        raise typer.Exit()
+
+    print_banner(version=__version__)
+    records = _resolve_instance_records(target, allow_all=True)
+    if refresh:
+        config = _load_or_setup_config()
+        records = _refresh_instance_records(config, records)
+    _print_instance_records(records)
 
 
 volumes_app = typer.Typer(

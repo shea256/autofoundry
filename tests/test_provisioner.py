@@ -44,6 +44,7 @@ class TestProvisionWithVolume:
             ssh=SshConnectionInfo(host="1.2.3.4", port=22222),
         )
         mock.create_instance.return_value = info
+        mock.get_instance.return_value = info
         mock.wait_until_ready.return_value = info
         return mock
 

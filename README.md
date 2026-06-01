@@ -61,6 +61,22 @@ autofoundry run train.sh --volume my-data --provider runpod
 autofoundry run --resume <session-id>
 ```
 
+### Manage instances directly
+
+```bash
+# Provision an instance without running an experiment
+autofoundry instance up --gpu H100 --provider runpod --auto
+
+# Run a script on an existing operation or instance
+autofoundry instance run <session-id-or-instance-id> train.sh
+
+# Stop, restart, inspect, or delete instances
+autofoundry instance stop <target>
+autofoundry instance up <target>
+autofoundry instance status <target>
+autofoundry instance terminate <target>
+```
+
 ### Browse GPU inventory
 
 ```bash

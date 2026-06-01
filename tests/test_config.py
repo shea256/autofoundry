@@ -34,7 +34,10 @@ class TestConfig:
 
     def test_load_returns_none_when_no_config(self, tmp_path: Path) -> None:
         config_file = tmp_path / "nonexistent" / "config.toml"
-        with patch("autofoundry.config.CONFIG_FILE", config_file):
+        with (
+            patch("autofoundry.config.CONFIG_FILE", config_file),
+            patch.dict("os.environ", {}, clear=True),
+        ):
             assert Config.load() is None
 
     def test_configured_providers(self) -> None:
