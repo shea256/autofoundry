@@ -20,7 +20,6 @@ from autofoundry.theme import (
     make_table,
     print_error,
     print_header,
-    print_success,
     term,
 )
 
@@ -277,6 +276,7 @@ def auto_plan(
     provider_filter: str | None = None,
     region_filter: str | None = None,
     datacenter_id: str | None = None,
+    instance_count: int = 1,
 ) -> ProvisioningPlan | None:
     """Non-interactive planning: auto-select cheapest matching offer."""
     print_header(TERMS["planning"])
@@ -348,16 +348,16 @@ def auto_plan(
     )
 
     plan = ProvisioningPlan(
-        offers=[(cheapest, 1)],
+        offers=[(cheapest, instance_count)],
         total_experiments=total_experiments,
         script_path=script_path,
     )
 
     console.print(
         f"  [af.primary]DEPLOYMENT PLAN:[/af.primary] "
-        f"1 {TERMS['instance'].lower()}, "
+        f"{instance_count} {term('instances', instance_count).lower()}, "
         f"{total_experiments} {term('experiments', total_experiments).lower()}, "
-        f"${cheapest.price_per_hour:.2f}/hr"
+        f"${cheapest.price_per_hour * instance_count:.2f}/hr"
     )
     console.print()
 
@@ -470,8 +470,8 @@ def interactive_plan(
         selected = offers[idx]
         if selected.availability == 0:
             console.print(
-                f"  [af.alert]WARNING:[/af.alert] This unit shows 0 availability — "
-                f"launch will likely fail."
+                "  [af.alert]WARNING:[/af.alert] This unit shows 0 availability — "
+                "launch will likely fail."
             )
             if not Confirm.ask("  [af.label]Continue anyway?[/af.label]", default=False):
                 continue

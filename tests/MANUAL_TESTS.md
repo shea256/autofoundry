@@ -15,7 +15,7 @@ autofoundry run --help
 autofoundry build --help  # expect error
 ```
 
-**Pass:** Help shows config, inventory, volumes, run, status, results, teardown. No build command.
+**Pass:** Help shows config, inventory, volumes, instance, run, status, results, teardown. No build command.
 
 ---
 
@@ -139,7 +139,29 @@ autofoundry teardown op-55
 
 ---
 
-## 9. Volume run (RunPod)
+## 9. Direct instance lifecycle
+
+Provision an instance without running an experiment:
+
+```bash
+autofoundry instance up --gpu H100 --provider runpod --auto
+```
+
+Use the operation ID shown by the command:
+
+```bash
+autofoundry instance status <op-id>
+autofoundry instance run <op-id> scripts/run_autoresearch.sh
+autofoundry instance stop <op-id>
+autofoundry instance up <op-id>
+autofoundry instance terminate <op-id>
+```
+
+**Pass:** Instance provisions, appears in status, accepts ad hoc script execution, stops/restarts when supported, and terminates cleanly.
+
+---
+
+## 10. Volume run (RunPod)
 
 Create a volume and run with it:
 
@@ -171,7 +193,7 @@ autofoundry run scripts/run_autoresearch.sh --volume af-workspace
 
 ---
 
-## 10. Volume with incompatible provider
+## 11. Volume with incompatible provider
 
 ```bash
 autofoundry run scripts/run_autoresearch.sh --volume my-vol
@@ -183,7 +205,7 @@ Select PRIME Intellect or Vast.ai instead of RunPod/Lambda Labs.
 
 ---
 
-## 11. Quick provider one-liners
+## 12. Quick provider one-liners
 
 One-command end-to-end testing per provider:
 
