@@ -247,6 +247,9 @@ def provision_instances(
         volume_id: Network volume ID to attach to instances.
         volume_region: Region/datacenter of the volume (for co-location).
     """
+    if any(offer.execution_kind == "serverless" for offer, _ in plan.offers):
+        raise ValueError("Serverless offers require the job executor, not host provisioning")
+
     print_header(f"{TERMS['provisioning']}")
     console.print()
 

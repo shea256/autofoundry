@@ -19,6 +19,7 @@ from autofoundry.gpu_filter import (
     GpuQuery,
     resolve_query,
 )
+from autofoundry.modal_cli import app as modal_app
 from autofoundry.models import InstanceInfo, InstanceStatus, Session, SessionStatus
 from autofoundry.state import SessionStore
 from autofoundry.theme import (
@@ -42,6 +43,9 @@ app = typer.Typer(
 )
 
 
+app.add_typer(modal_app, name="modal")
+
+
 @app.callback(context_settings={"help_option_names": []})
 def _default(
     ctx: typer.Context,
@@ -55,6 +59,9 @@ def _default(
         console.print("    [af.secondary]config[/af.secondary]    Configure API keys, SSH key, and default GPU type")
         console.print("    [af.secondary]inventory[/af.secondary] Browse GPU inventory across supply lines")
         console.print("    [af.secondary]volumes[/af.secondary]   Manage network volumes (list, create)")
+        console.print(
+            "    [af.secondary]modal[/af.secondary]     Plan/run serverless jobs and clean up"
+        )
         console.print("    [af.secondary]instance[/af.secondary]  Manage GPU instances directly")
         console.print("    [af.secondary]run[/af.secondary]       Launch GPU experiment orchestration engine")
         console.print("    [af.secondary]status[/af.secondary]    Show status of operations and instances")
@@ -643,6 +650,18 @@ def run(
         ])
         raise typer.Exit()
 
+    if provider and provider.lower() == "modal":
+        from autofoundry.modal_cli import execute_modal
+
+        if resume or multi_gpu or not script:
+            print_error("Modal requires a script and has no host resume; "
+                        "use 'autofoundry modal run --gpu-count N' for multi-GPU jobs")
+            raise typer.Exit(1)
+        execute_modal(script, gpu=gpu, segment=segment, min_vram=min_vram,
+                      max_vram=max_vram, region=region, image=image, volume=volume,
+                      num=num if num is not None else 1)
+        return
+
     print_banner(version=__version__)
 
     config = _load_or_setup_config()
@@ -1050,6 +1069,10 @@ def instance_up(
             ("--help, -h", "Show this help"),
         ])
         raise typer.Exit()
+
+    if provider and provider.lower() == "modal":
+        print_error("Modal runs bounded serverless jobs. Use 'autofoundry modal run --help'.")
+        raise typer.Exit(1)
 
     print_banner(version=__version__)
     config = _load_or_setup_config()
@@ -1582,11 +1605,13 @@ def inventory(
     segment: str = typer.Option(None, "--segment", "-s", help="GPU segment (consumer, workstation, datacenter)"),
     min_vram: float = typer.Option(None, "--min-vram", help="Minimum VRAM in GB (e.g. 80)"),
     max_vram: float = typer.Option(None, "--max-vram", help="Maximum VRAM in GB"),
+    provider: str | None = typer.Option(None, "--provider", help="Provider (modal needs no key)"),
     multi_gpu: bool = typer.Option(False, "--multi-gpu", help="Include multi-GPU instances"),
 ) -> None:
     """Browse GPU inventory across all configured supply lines."""
     if help_:
         _print_command_help("autofoundry inventory", "Browse GPU inventory across supply lines", [
+            ("--provider TEXT", "Provider filter; Modal catalog requires no credentials"),
             ("--gpu, -g TEXT", "GPU type to filter (e.g. H100)"),
             ("--segment, -s TEXT", "GPU segment (consumer, workstation, datacenter)"),
             ("--min-vram FLOAT", "Minimum VRAM in GB (e.g. 80)"),
@@ -1598,10 +1623,13 @@ def inventory(
     from autofoundry.planner import display_offers, query_all_offers
 
     print_banner(version=__version__)
-    config = _load_or_setup_config()
+    config = (Config.load() or Config()) if provider != "modal" else Config()
+    if provider:
+        config.api_keys = {p: key for p, key in config.api_keys.items() if p.value == provider}
 
     if gpu:
         query = resolve_query(gpu_type=gpu)
+        query.vram_min, query.vram_max = min_vram, max_vram
     elif segment is not None or min_vram is not None or max_vram is not None:
         query = resolve_query(segment=segment, vram_min=min_vram, vram_max=max_vram)
     else:
@@ -1613,7 +1641,7 @@ def inventory(
     print_status("Searching for", query.description)
     console.print()
 
-    all_offers = query_all_offers(config, query)
+    all_offers = query_all_offers(config, query, include_serverless=provider in (None, "modal"))
     if not all_offers:
         print_error(f"No inventory found for {query.description}")
         raise typer.Exit(1)

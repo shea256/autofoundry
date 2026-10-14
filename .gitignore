@@ -10,3 +10,5 @@ archive
 reference/
 .DS_Store
 .context/
+# Official Modal credentials must stay outside version control.
+.modal.toml
