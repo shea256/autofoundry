@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from autofoundry.config import PROVIDER_DISPLAY, Config
+from autofoundry.defaults import PROVIDER_IMAGES
 from autofoundry.models import (
     InstanceConfig,
     InstanceInfo,
@@ -30,15 +31,6 @@ from autofoundry.theme import (
     print_success,
     term,
 )
-
-# Provider-native default images — latest CUDA available per platform
-PROVIDER_IMAGES: dict[ProviderName, str] = {
-    ProviderName.RUNPOD: "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",
-    ProviderName.VASTAI: "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",
-    ProviderName.PRIMEINTELLECT: "cuda_12_4_pytorch_2_4",
-    ProviderName.LAMBDALABS: "",  # Lambda uses pre-configured Ubuntu images, not Docker
-}
-
 
 _SCRIPT_IMAGE_RE = re.compile(r"^#\s*autofoundry:image:(\w+)=(.+)$")
 

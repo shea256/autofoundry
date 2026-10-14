@@ -16,8 +16,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
-from autofoundry.executor import parse_metrics
 from autofoundry.gpu_filter import GpuQuery, filter_by_vram, gpu_name_matches
+from autofoundry.metrics import parse_metrics
 from autofoundry.models import GpuOffer, ProviderName
 
 CATALOG_DATE = "2026-10-14"

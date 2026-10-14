@@ -136,6 +136,13 @@ autofoundry teardown <session-id>
 
 See the [full documentation](docs/README.md) for writing experiment scripts, network volumes, resuming sessions, custom images, CLI reference, and architecture details.
 
+## Use from an agent
+
+The [Autofoundry skill](.agents/skills/autofoundry/SKILL.md) uses the non-interactive
+`autofoundry.api` Python interface for discovery, planning, execution and cleanup.
+See [agent setup and sharing](docs/agents.md) for installation and portable packaging.
+Repository development instructions live in [AGENTS.md](AGENTS.md).
+
 ## Requirements
 
 - Python 3.11+

@@ -1,19 +1,38 @@
 # Autofoundry
 
-CLI tool to run ML experiment scripts across GPUs on multiple cloud providers.
+Python library and CLI for ML experiments across GPU providers.
+Agent-facing usage is defined by `.agents/skills/autofoundry/SKILL.md`.
 `autofoundry run <script>` → pick GPUs → provision → execute → stream output → report metrics → teardown.
+
+## Working in this repository
+
+- Keep reusable behavior in the Python library. `autofoundry.api` must not import the
+  CLI, prompt, print terminal UI, load `.env`, or write user configuration.
+- Keep provider-specific details in adapters; host and serverless lifecycles differ.
+- Never include credentials in source, logs, error payloads, command arguments or chat.
+- Run `uv run --extra modal python -m pytest -q`, Ruff on changed files, and `git diff --check`.
+  Full-repository Ruff currently has 35 baseline findings; do not introduce more.
+- Test provider changes with mocks. Do not use real credentials, create account resources
+  or launch paid workloads unless the user's authorization explicitly includes that work.
+- For skill changes, validate `.agents/skills/autofoundry/SKILL.md` and run the API tests.
+  Keep the skill portable: references resolve within its own folder, not a developer's home.
+- `AGENTS.md` is the canonical repository guidance. Do not maintain duplicate `.claude`
+  instruction files. Shared skills live under `.agents/skills/`.
 
 ## Architecture
 
 ```
-cli.py → planner.py → provisioner.py → executor.py → reporter.py
+api.py → providers + metrics (non-interactive library)
+cli.py → planner.py → provisioner.py → executor.py → reporter.py (terminal UX)
 ```
 
+- **Agent API**: `src/autofoundry/api.py` — structured discovery, local plans, explicit host lifecycle, SSH scripts, Modal jobs and cleanup
+- **Shared logic**: `metrics.py` and `defaults.py` — UI-free parsing and image defaults
 - **CLI**: `src/autofoundry/cli.py` — `run`, `config`, `inventory`, `volumes` (list, create), `status`, `results`, `teardown` commands via Typer
 - **Models**: `src/autofoundry/models.py` — GpuOffer, InstanceConfig, InstanceInfo, VolumeInfo, ProvisioningPlan
 - **Config**: `src/autofoundry/config.py` — TOML config at `~/.config/autofoundry/config.toml` (custom serializer outputs lowercase `true`/`false` for booleans); includes `min_bandwidth_mbps` (default 5000), `default_segment` (default `datacenter`), `default_min_vram` (default `80`), and `huggingface_token`; all values support env var fallbacks (config.toml takes precedence)
 - **GPU Filter**: `src/autofoundry/gpu_filter.py` — GPU tier definitions (category+VRAM), name matching, VRAM filtering, and query resolution
-- **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect,lambdalabs}.py`
+- **Providers**: `src/autofoundry/providers/{runpod,vastai,primeintellect,lambdalabs,modal}.py`
 - **Theme**: `src/autofoundry/theme.py` — NGE-inspired terminal aesthetic ("operations", "units", "supply lines", "reserves", "sync test"); `term()` helper selects singular/plural forms based on count
 - **State**: `src/autofoundry/state.py` — SQLite-backed session persistence (WAL mode)
 
@@ -67,6 +86,17 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - Attach via `file_system_names` in launch payload, mounts at `/lambda/nfs/persistent-storage`
 - Region handling: each region is separate offer with metadata
 
+### Modal
+
+- Serverless GPU Sandboxes, not SSH hosts. Use `ModalJobSpec` and `run_job`/`cleanup_job`.
+- Public catalog capacity is unknown. Prices are a dated snapshot; compute estimates
+  include Sandbox CPU/RAM and region multipliers, not total cost.
+- Official SDK token/profile configuration only. No Autofoundry API-key field for Modal.
+- Existing App and optional Volume lookup only; no implicit account-resource creation.
+- Exact A100 memory variants and `H100!`; no fallback lists or automatic upgrades.
+- Run once, persist job ID and results, attempt bounded exact-resource cleanup.
+- See `docs/modal.md` for sources, semantics and remaining live-validation gate.
+
 ## Environment Forwarding
 - `python-dotenv` loads `.env` on CLI startup (`cli.py`)
 - Config precedence: config.toml > env vars/.env > defaults
@@ -75,10 +105,9 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
 - `AUTOFOUNDRY_IMAGE` is forwarded when `--image` is specified, so scripts can branch on which image is running
 
 ## SSH Execution
-- `executor.py` uses subprocess SSH/SCP (not asyncssh, despite the dependency)
+- CLI `executor.py` uses subprocess SSH/SCP. Agent API uses AsyncSSH with verified host keys and no environment forwarding.
 - `BatchMode=yes` + `PasswordAuthentication=no` prevent password prompt hangs
-- `-tt` flag forces PTY for line-buffered remote output streaming
-- SSH retry loop (10 attempts, 5s delay) before upload — key auth can lag behind port availability
+- CLI SSH retry loop (30 attempts, 10s delay) before upload — key auth can lag behind port availability
 - Metadata passthrough: `GpuOffer.metadata` → `InstanceConfig.metadata` → provider's `create_instance`
 
 ## Session Persistence
@@ -113,10 +142,5 @@ cli.py → planner.py → provisioner.py → executor.py → reporter.py
   2. **Pre-built image** — `AUTOFOUNDRY_IMAGE` contains "autoresearch" → inherits system torch, installs lightweight deps only
   3. **Fresh install** — isolated venv, installs everything including torch (~3-5 min)
 - Venv approach avoids "externally managed" Python errors on Ubuntu 24.04+ images where system Python is PEP 668-protected
-- Script outputs `---` delimiter followed by `key: value` metrics, parsed by `executor.parse_metrics()`
+- Script outputs `---` delimiter followed by `key: value` metrics, parsed by `metrics.parse_metrics()` (re-exported by `executor` for compatibility).
 
-## Status
-- RunPod: fully working (provision, execute, stream, report, teardown, volumes) ✓
-- Lambda Labs: fully working (provision, execute, stream, report, teardown) ✓
-- Vast.ai: fully working (provision, execute, stream, report, teardown) ✓
-- PRIME Intellect: fully working (provision, execute, stream, report, teardown) ✓

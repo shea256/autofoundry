@@ -8,6 +8,8 @@ For serverless GPU execution, see the [Modal guide](modal.md), including secure 
 authentication, public catalog pricing, unknown capacity, storage and cleanup. The host
 lifecycle documentation below applies to the existing SSH providers.
 
+For non-interactive automation and the shareable skill, see [Agent API and skills](agents.md).
+
 ## Table of Contents
 
 - [Installation](#installation)
