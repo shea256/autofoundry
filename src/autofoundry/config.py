@@ -16,6 +16,7 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 SESSIONS_DIR = CONFIG_DIR / "sessions"
 
 PROVIDER_DISPLAY = {
+    ProviderName.MODAL: "Modal",
     ProviderName.RUNPOD: "RunPod",
     ProviderName.VASTAI: "Vast.ai",
     ProviderName.PRIMEINTELLECT: "PRIME Intellect",
@@ -64,7 +65,7 @@ class Config:
 
     @property
     def configured_providers(self) -> list[ProviderName]:
-        return [p for p, key in self.api_keys.items() if key]
+        return [p for p, key in self.api_keys.items() if key and p != ProviderName.MODAL]
 
     @property
     def next_operation_id(self) -> str:
@@ -86,7 +87,9 @@ class Config:
             "huggingface_token": self.huggingface_token,
             "last_script": self.last_script,
             "next_operation": self._next_operation,
-            "api_keys": {p.value: key for p, key in self.api_keys.items()},
+            "api_keys": {
+                p.value: key for p, key in self.api_keys.items() if p != ProviderName.MODAL
+            },
         }
         CONFIG_FILE.write_text(_serialize_toml(data))
 
@@ -120,6 +123,8 @@ class Config:
 
         api_keys = data.get("api_keys", {})
         for provider in ProviderName:
+            if provider == ProviderName.MODAL:
+                continue  # Modal credentials belong only in official SDK configuration.
             key = api_keys.get(provider.value, "")
             if key:
                 config.api_keys[provider] = key
@@ -194,6 +199,8 @@ def first_run_setup(existing: Config | None = None) -> Config:
     config = existing if existing is not None else Config()
 
     for provider in ProviderName:
+        if provider == ProviderName.MODAL:
+            continue
         display = PROVIDER_DISPLAY[provider]
         already_configured = provider in config.api_keys
 

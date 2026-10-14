@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autofoundry"
+  short_description: "Plan and run GPU experiments through a Python API"
+  default_prompt: "Use $autofoundry to plan a GPU experiment and run it within my authorized budget."

@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from autofoundry.metrics import parse_metrics
 from autofoundry.models import InstanceInfo, SshConnectionInfo
 from autofoundry.theme import TERMS, console, print_error, print_success
 
@@ -119,22 +120,6 @@ def run_remote(
     return proc.returncode, lines
 
 
-def parse_metrics(lines: list[str]) -> dict[str, float]:
-    """Parse key-value metrics from output after a --- delimiter."""
-    metrics: dict[str, float] = {}
-    in_results = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped == "---":
-            in_results = True
-            continue
-        if in_results and ":" in stripped:
-            key, _, value = stripped.partition(":")
-            try:
-                metrics[key.strip()] = float(value.strip().rstrip("%"))
-            except ValueError:
-                pass
-    return metrics
 
 
 def execute_experiment(

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class ProviderName(StrEnum):
+    MODAL = "modal"
     RUNPOD = "runpod"
     VASTAI = "vastai"
     PRIMEINTELLECT = "primeintellect"
@@ -54,7 +55,9 @@ class GpuOffer(BaseModel):
     price_per_hour: float
     region: str | None = None
     inet_down_mbps: float = 0.0
-    availability: int = 1
+    availability: int | None = 1  # None: catalog only; capacity is unknown
+    execution_kind: str = "host"
+    price_basis: str = "provider_quote"
     metadata: dict[str, str] = Field(
         default_factory=dict,
         description="Provider-specific fields needed for instance creation",

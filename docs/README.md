@@ -4,6 +4,12 @@ Run any ML experiment script across GPUs on multiple cloud providers with a sing
 
 Autofoundry is a CLI companion to [Karpathy's autoresearch](https://github.com/karpathy/autoresearch). Point it at a shell script, pick your GPU configuration, and it handles the rest: provisioning instances, distributing experiment runs, streaming results live, and producing a final metrics report.
 
+For serverless GPU execution, see the [Modal guide](modal.md), including secure SDK
+authentication, public catalog pricing, unknown capacity, storage and cleanup. The host
+lifecycle documentation below applies to the existing SSH providers.
+
+For non-interactive automation and the shareable skill, see [Agent API and skills](agents.md).
+
 ## Table of Contents
 
 - [Installation](#installation)

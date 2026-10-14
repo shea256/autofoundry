@@ -47,6 +47,7 @@ def _query_provider_offers(
 
 def query_all_offers(
     config: Config, query: GpuQuery, datacenter_id: str | None = None,
+    *, include_serverless: bool = False,
 ) -> list[GpuOffer]:
     """Query all configured providers for GPU offers concurrently.
 
@@ -59,6 +60,10 @@ def query_all_offers(
     provider_gpu_type = query.gpu_type  # None for tier-based queries
     provider_vram_min = query.vram_min if not query.gpu_type else None
 
+    providers = list(config.configured_providers)
+    if include_serverless:
+        providers.append(ProviderName.MODAL)
+
     # Collect raw results per provider
     raw_offers: dict[ProviderName, list[GpuOffer]] = {}
     provider_errors: dict[ProviderName, str] = {}
@@ -66,11 +71,11 @@ def query_all_offers(
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
             pool.submit(
-                _query_provider_offers, provider, config.api_keys[provider],
+                _query_provider_offers, provider, config.api_keys.get(provider, ""),
                 provider_gpu_type, datacenter_id, config.min_bandwidth_mbps,
                 provider_vram_min,
             ): provider
-            for provider in config.configured_providers
+            for provider in providers
         }
         for future in as_completed(futures):
             provider = futures[future]
@@ -104,16 +109,19 @@ def query_all_offers(
         all_offers = [o for o in all_offers if gpu_name_matches(query.gpu_type, o.gpu_type)]
 
     # Report per-provider counts (after filtering)
-    for provider in config.configured_providers:
+    for provider in providers:
         display = PROVIDER_DISPLAY.get(provider, provider.value)
         if provider in provider_errors:
             print_error(f"{display}: {provider_errors[provider]}")
         else:
             count = sum(1 for o in all_offers if o.provider == provider)
             if count:
+                description = (
+                    "catalog configurations (capacity unknown)" if provider == ProviderName.MODAL
+                    else f"{term('instances', count).lower()} found"
+                )
                 console.print(
-                    f"  [af.success]OK:[/af.success] {display} — "
-                    f"{count} {term('instances', count).lower()} found"
+                    f"  [af.success]OK:[/af.success] {display} — {count} {description}"
                 )
             else:
                 units = TERMS['instances'].lower()
@@ -173,6 +181,8 @@ def display_offers(offers: list[GpuOffer], *, truncate: bool = True) -> tuple[li
 
         hidden = total_count - len(show_offers)
         title = f"{display_name} — {total_count} {term('instances', total_count).lower()}"
+        if provider == ProviderName.MODAL:
+            title = f"Modal — {total_count} catalog configurations (capacity unknown)"
         if hidden > 0:
             title += f" (showing {len(show_offers)})"
 
@@ -245,13 +255,20 @@ def _render_provider_table(
             f"${offer.price_per_hour:.2f}",
             dl_speed,
             offer.region or "—",
-            str(offer.availability) if offer.availability > 0 else "—",
+            ("unknown" if offer.availability is None else
+             str(offer.availability) if offer.availability > 0 else "—"),
         )
         displayed.append(offer)
         global_num += 1
 
     console.print()
     console.print(table)
+    if any(o.execution_kind == "serverless" for o in offers):
+        catalog_date = offers[0].metadata.get("catalog_date", "unknown")
+        console.print(f"  Modal: published catalog dated {catalog_date}; capacity unknown. "
+                      "$/hr is estimated compute "
+                      "(GPU + 2 CPU cores + 16 GiB RAM), not total cost. "
+                      "Storage/egress/builds/fees extra. Use autofoundry modal --help.")
     return displayed, global_num
 
 

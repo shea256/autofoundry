@@ -14,6 +14,7 @@ Autofoundry is a CLI companion to [Karpathy's autoresearch](https://github.com/k
 - **[Vast.ai](https://vast.ai/)** — Global GPU marketplace
 - **[PRIME Intellect](https://www.primeintellect.ai/)** — Decentralized GPU network
 - **[Lambda Labs](https://lambdalabs.com/)** — On-demand cloud GPUs
+- **[Modal](https://modal.com/)** — Bounded serverless GPU jobs; [setup, pricing and limitations](docs/modal.md)
 
 ## Quickstart
 
@@ -88,6 +89,18 @@ autofoundry inventory --segment datacenter --min-vram 80
 autofoundry inventory --gpu A100
 ```
 
+### Modal serverless jobs
+
+```bash
+# Public catalog and local plan (no credentials or compute required)
+autofoundry inventory --provider modal --gpu A100 --min-vram 80
+autofoundry modal run train.sh --gpu A100 --min-vram 80 --dry-run
+```
+
+Authenticated execution uses the optional official SDK and an existing Modal App.
+See [Modal setup and execution](docs/modal.md). Modal catalog capacity is unknown;
+compute estimates include GPU, CPU and RAM but are not total-cost quotes.
+
 ### Configure
 
 ```bash
@@ -123,11 +136,18 @@ autofoundry teardown <session-id>
 
 See the [full documentation](docs/README.md) for writing experiment scripts, network volumes, resuming sessions, custom images, CLI reference, and architecture details.
 
+## Use from an agent
+
+The [Autofoundry skill](.agents/skills/autofoundry/SKILL.md) uses the non-interactive
+`autofoundry.api` Python interface for discovery, planning, execution and cleanup.
+See [agent setup and sharing](docs/agents.md) for installation and portable packaging.
+Repository development instructions live in [AGENTS.md](AGENTS.md).
+
 ## Requirements
 
 - Python 3.11+
-- SSH key pair (ed25519 or RSA)
-- At least one provider API key (RunPod, Vast.ai, PRIME Intellect, or Lambda Labs)
+- SSH key pair (ed25519 or RSA) for host providers; Modal uses no SSH
+- A host provider API key, or official Modal token configuration for serverless execution
 
 ## License
 
